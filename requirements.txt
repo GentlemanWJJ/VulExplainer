@@ -1,5 +1,5 @@
 transformers==4.19.1
-torch==1.10.2+cu113
+torch==1.10.2
 numpy==1.22.3
 tqdm==4.62.3
 pandas==1.4.1

@@ -7,7 +7,9 @@ import random
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
-from transformers import (AdamW, get_linear_schedule_with_warmup, RobertaTokenizer, RobertaModel)
+from transformers import ( get_linear_schedule_with_warmup, RobertaTokenizer, RobertaModel)
+from torch.optim import AdamW
+
 from tqdm import tqdm
 from textcnn_model import TextCNN
 from teacher_model import CNNTeacherModel
@@ -343,7 +345,7 @@ def main():
                         help="training epochs")
     args = parser.parse_args()
     # Setup CUDA, GPU
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.n_gpu = 1
     args.device = device
 

@@ -1,6 +1,6 @@
 python teacher_main.py \
     --output_dir=./saved_models \
-    --model_name=cnnteacher.bin \
+    --model_name=train.bin \
     --tokenizer_name=microsoft/codebert-base \
     --model_name_or_path=microsoft/codebert-base \
     --train_data_file=../../data/big_vul/train.csv \

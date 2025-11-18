@@ -8,12 +8,14 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
-from transformers import (AdamW, get_linear_schedule_with_warmup, RobertaTokenizer, RobertaModel)
+from transformers import (get_linear_schedule_with_warmup, RobertaTokenizer, RobertaModel)
+from torch.optim import AdamW
+
 from tqdm import tqdm
 from student_codebert_model import StudentBERT
 import pandas as pd
 # metrics
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from textcnn_model import TextCNN
 from teacher_model import CNNTeacherModel
 
@@ -289,9 +291,14 @@ def test(args, model, tokenizer, test_dataset, beta):
         nb_eval_steps += 1
     # calculate scores
     acc = accuracy_score(y_trues, y_preds)
-
+    precision = precision_score(y_trues, y_preds, average='weighted')
+    recall = recall_score(y_trues, y_preds, average='weighted')
+    f1 = f1_score(y_trues, y_preds, average='weighted')
     result = {
         "test_accuracy": float(acc),
+        "test_precision": float(precision),
+        "test_recall": float(recall),
+        "test_f1": float(f1),
         "best_beta": BEST_BETA,
     }
 
@@ -380,7 +387,7 @@ def main():
     
     args = parser.parse_args()
     # Setup CUDA, GPU
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.n_gpu = 1
     args.device = device
 
@@ -414,7 +421,7 @@ def main():
                             args=args,
                             hidden_size=300)    
     
-    teacher_model.load_state_dict(torch.load("./saved_models/checkpoint-best-acc/cnnteacher.bin", map_location=args.device))
+    teacher_model.load_state_dict(torch.load("./saved_models/checkpoint-best-acc/cnnteacher.bin", map_location=args.device), strict=False)
     teacher_model.to(args.device)
     
     model = RobertaModel.from_pretrained(args.model_name_or_path)
@@ -431,7 +438,7 @@ def main():
     if args.do_test:
         checkpoint_prefix = f'checkpoint-best-acc/{args.model_name}'
         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
-        model.load_state_dict(torch.load(output_dir, map_location=args.device))
+        model.load_state_dict(torch.load(output_dir, map_location=args.device),strict=False)
         model.to(args.device)
         test_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='test')
         y_trues, y_preds = test(args, model, tokenizer, test_dataset, beta=args.beta)
