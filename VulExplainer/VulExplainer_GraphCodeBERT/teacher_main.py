@@ -9,8 +9,10 @@ import re
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
-from transformers import (AdamW, get_linear_schedule_with_warmup,
+from transformers import (get_linear_schedule_with_warmup,
                           RobertaConfig, RobertaTokenizer, RobertaModel)
+from torch.optim import AdamW
+
 from tqdm import tqdm
 import multiprocessing
 from graphcodebert_model import Model
@@ -33,7 +35,7 @@ dfg_function={
     'c_sharp':DFG_csharp,
 }
 
-#load parsers
+# load parsers
 parsers={}        
 for lang in dfg_function:
     LANGUAGE = Language('parser/my-languages.so', lang)
@@ -182,7 +184,7 @@ def convert_examples_to_features(examples, labels, group_labels, tokenizer, args
         )
     return features
 
-#remove comments, tokenize code and extract dataflow     
+# remove comments, tokenize code and extract dataflow
 def extract_dataflow(code, parser,lang):
     #remove comments
     try:
@@ -338,7 +340,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                         output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
-                        
+
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     #build dataloader
     eval_sampler = SequentialSampler(eval_dataset)

@@ -1,9 +1,9 @@
 python student_codebert_main.py \
-    --alpha 0.7 \
+    --alpha 1.0 \
     --output_dir=./saved_models \
     --model_name=soft_distil_model_07.bin \
-    --tokenizer_name=microsoft/codebert-base \
-    --model_name_or_path=microsoft/codebert-base \
+    --tokenizer_name=Salesforce/codet5p-110m-embedding \
+    --model_name_or_path=Salesforce/codet5p-110m-embedding \
     --train_data_file=../../data/big_vul/train.csv \
     --eval_data_file=../../data/big_vul/val.csv \
     --test_data_file=../../data/big_vul/test.csv \

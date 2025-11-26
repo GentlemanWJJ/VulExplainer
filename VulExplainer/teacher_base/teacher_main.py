@@ -6,23 +6,17 @@ import pickle
 import random
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
-from transformers import (get_linear_schedule_with_warmup, RobertaTokenizer, RobertaModel)
+from transformers import ( get_linear_schedule_with_warmup, RobertaTokenizer, RobertaModel)
 from torch.optim import AdamW
 
 from tqdm import tqdm
-from student_codebert_model import StudentBERT
+from textcnn_model import TextCNN
+from teacher_model import CNNTeacherModel
 import pandas as pd
 # metrics
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
-from textcnn_model import TextCNN
-from teacher_model import CNNTeacherModel
 
-global BEST_BETA
-BEST_BETA = None
-
-cpu_cont = 16
 logger = logging.getLogger(__name__)
 
 class InputFeatures(object):
@@ -34,9 +28,9 @@ class InputFeatures(object):
                  group):
         self.input_tokens = input_tokens
         self.input_ids = input_ids
-        self.label=label
+        self.label = label
         self.group = group
-        
+
 
 class TextDataset(Dataset):
     def __init__(self, tokenizer, args, cwe_label_map, group_label_map, file_type="train"):
@@ -53,18 +47,20 @@ class TextDataset(Dataset):
         groups = df["cwe_abstract_group"].tolist()
         for i in tqdm(range(len(funcs))):
             label = cwe_label_map[labels[i]][1]
+            group_label = 0
+            # group_label = group_label_map[groups[i]]
             # count label freq if it's training data
             if file_type == "train":
                 cwe_label_map[labels[i]][2] += 1
-            self.examples.append(convert_examples_to_features(funcs[i], label, group_label_map[groups[i]], tokenizer, args))
+            self.examples.append(convert_examples_to_features(funcs[i], label, group_label, tokenizer, args))
         if file_type == "train":
             self.cwe_label_map = cwe_label_map
             for example in self.examples[:3]:
-                    logger.info("*** Example ***")
-                    logger.info("label: {}".format(example.label))
-                    logger.info("input_ids: {}".format(' '.join(map(str, example.input_ids))))
-                    logger.info("group: {}".format(example.group))
-                    logger.info("input_tokens: {}".format([x.replace('\u0120','_') for x in example.input_tokens]))
+                logger.info("*** Example ***")
+                logger.info("label: {}".format(example.label))
+                logger.info("group: {}".format(example.group))
+                logger.info("input_tokens: {}".format([x.replace('\u0120','_') for x in example.input_tokens]))
+                logger.info("input_ids: {}".format(' '.join(map(str, example.input_ids))))
 
     def __len__(self):
         return len(self.examples)
@@ -72,14 +68,28 @@ class TextDataset(Dataset):
     def __getitem__(self, i):       
         return torch.tensor(self.examples[i].input_ids), torch.tensor(self.examples[i].label).float(), torch.tensor(self.examples[i].group)
 
-def convert_examples_to_features(func, label, group, tokenizer, args):
-    # input ids
-    code_tokens = tokenizer.tokenize(str(func))[:args.block_size-3]
-    source_tokens = [tokenizer.cls_token] + code_tokens + [tokenizer.dis_token] + [tokenizer.sep_token] 
+def convert_examples_to_features(func, label, group_label, tokenizer, args):
+    #source
+    code_tokens = tokenizer.tokenize(str(func))[:args.block_size-2]
+    source_tokens = [tokenizer.cls_token] + code_tokens + [tokenizer.sep_token]
     source_ids = tokenizer.convert_tokens_to_ids(source_tokens)
     padding_length = args.block_size - len(source_ids)
     source_ids += [tokenizer.pad_token_id] * padding_length
-    return InputFeatures(source_tokens, source_ids, label, group)
+    return InputFeatures(source_tokens, source_ids, label, group_label)
+
+def compute_adjustment(tau, args, cwe_label_map):
+    """compute the base probabilities"""
+    freq = []
+    for i in range(len(cwe_label_map)):
+        for k, v in cwe_label_map.items():
+            if v[0] == i:
+                freq.append(v[2])
+    label_freq_array = np.array(freq)
+    label_freq_array = label_freq_array / label_freq_array.sum()
+    adjustments = np.log(label_freq_array ** tau + 1e-12)
+    adjustments = torch.from_numpy(adjustments)
+    adjustments = adjustments.to(args.device)
+    return adjustments
 
 def set_seed(args):
     random.seed(args.seed)
@@ -88,12 +98,17 @@ def set_seed(args):
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
 
-def train(args, train_dataset, model, teacher_model, tokenizer, eval_dataset, cwe_label_map):
+def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
     """ Train the model """
     # build dataloader
     train_sampler = RandomSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=0)
     
+    if args.use_logit_adjustment:
+        logit_adjustment = compute_adjustment(tau=args.tau, args=args, cwe_label_map=cwe_label_map)
+    else:
+        logit_adjustment = None
+
     args.max_steps = args.epochs * len(train_dataloader)
     # evaluate the model per epoch
     args.save_steps = len(train_dataloader)
@@ -107,7 +122,7 @@ def train(args, train_dataset, model, teacher_model, tokenizer, eval_dataset, cw
          'weight_decay': args.weight_decay},
         {'params': [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], 'weight_decay': 0.0}
     ]
-    optimizer = AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
+    optimizer = torch.optim.AdamW(optimizer_grouped_parameters, lr=args.learning_rate, eps=args.adam_epsilon)
     scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=args.warmup_steps,
                                                 num_training_steps=args.max_steps)
 
@@ -135,39 +150,15 @@ def train(args, train_dataset, model, teacher_model, tokenizer, eval_dataset, cw
         tr_num = 0
         train_loss = 0
         for step, batch in enumerate(bar):
-            input_ids, labels, groups = [x.to(args.device) for x in batch]
+            (input_ids, labels, groups) = [x.to(args.device) for x in batch]            
             model.train()
-            teacher_logits = teacher_model(input_ids=input_ids, groups=groups, labels=labels, return_logit=True)
-            soft_label = nn.functional.log_softmax(teacher_logits, dim=-1)
-            probs = torch.softmax(teacher_logits, dim=-1)
-            teacher_preds = torch.argmax(probs, dim=1)
-            teacher_preds_one_hot = []
-            for pred in teacher_preds:
-                for _, v in cwe_label_map.items():
-                    if v[0] == pred.item():
-                        teacher_preds_one_hot.append(v[1])
-            teacher_preds_one_hot = torch.tensor(teacher_preds_one_hot).float().to(args.device)
-            if args.use_hard_distil:
-                loss, loss_dis = model(input_ids=input_ids, 
-                                        labels=labels, 
-                                        soft_label=None,
-                                        hard_label=teacher_preds_one_hot)
-            else:
-                loss, loss_dis = model(input_ids=input_ids,
-                                        labels=labels,
-                                        soft_label=soft_label,
-                                        hard_label=None)
+            loss = model(input_ids=input_ids, groups=groups, labels=labels)
             if args.n_gpu > 1:
                 loss = loss.mean()
-                loss_dis = loss_dis.mean()
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps
-                loss_dis = loss_dis / args.gradient_accumulation_steps
-
-            total_loss = args.alpha * loss + (1-args.alpha) * loss_dis
-            total_loss.backward()
+            loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-
             tr_loss += loss.item()
             tr_num += 1
             train_loss += loss.item()
@@ -182,18 +173,17 @@ def train(args, train_dataset, model, teacher_model, tokenizer, eval_dataset, cw
                 optimizer.zero_grad()
                 scheduler.step()  
                 global_step += 1
+                output_flag=True
                 avg_loss=round(np.exp((tr_loss - logging_loss) /(global_step- tr_nb)),4)
+
                 if global_step % args.save_steps == 0:
                     results = evaluate(args, model, tokenizer, eval_dataset, eval_when_training=True)    
+                    
                     # Save model checkpoint
-                    if results['eval_acc']>best_acc:
-                        best_acc=results['eval_acc']
-                        best_beta = results['best_beta']
-                        global BEST_BETA
-                        BEST_BETA = best_beta
+                    if results['eval_accuracy']>best_acc:
+                        best_acc=results['eval_accuracy']
                         logger.info("  "+"*"*20)  
                         logger.info("  Best Acc:%s",round(best_acc,4))
-                        logger.info("  Best Beta:%s",best_beta)
                         logger.info("  "+"*"*20)                          
                         
                         checkpoint_prefix = 'checkpoint-best-acc'
@@ -204,9 +194,9 @@ def train(args, train_dataset, model, teacher_model, tokenizer, eval_dataset, cw
                         output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
-                        
+
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
-    #build dataloader
+    # build dataloader
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
 
@@ -218,41 +208,25 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     logger.info("***** Running evaluation *****")
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
-    
-    nb_eval_steps = 0
     model.eval()
-    y_preds=[[], [], [], [], []]  
-    y_trues=[[], [], [], [], []]
+    y_preds=[]  
+    y_trues=[]
     for batch in eval_dataloader:
-        input_ids, labels, groups = [x.to(args.device) for x in batch]        
+        (input_ids, labels, groups) = [x.to(args.device) for x in batch]            
         with torch.no_grad():
-            probs, betas = model(input_ids=input_ids)
-            for i in range(len(probs)):
-                y_preds[i] += list((np.argmax(probs[i].cpu().numpy(), axis=1)))
-                y_trues[i] += list((np.argmax(labels.cpu().numpy(), axis=1)))
-        nb_eval_steps += 1
-    
-    accs = []
-    for i in range(len(y_preds)):
-        accs.append(accuracy_score(y_trues[i], y_preds[i]))
-
-    max_idx = accs.index(max(accs))
-    acc = max(accs)
-    
-    if max_idx == 0:
-        best_beta = 0.5
-    elif max_idx == 1:
-        best_beta = 0.6
-    elif max_idx == 2:
-        best_beta = 0.7
-    elif max_idx == 3:
-        best_beta = 0.8
-    elif max_idx == 4:
-        best_beta = 0.9
-
+            prob = model(input_ids=input_ids, groups=groups, labels=labels, return_prob=True)
+            y_preds += list((np.argmax(prob.cpu().numpy(), axis=1)))
+            y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))    
+    # calculate scores
+    acc = accuracy_score(y_trues, y_preds)
+    precision = precision_score(y_trues, y_preds, average="weighted")
+    recall = recall_score(y_trues, y_preds, average="weighted")
+    f1 = f1_score(y_trues, y_preds, average="weighted")
     result = {
-        "eval_acc": float(acc),
-        "best_beta": best_beta,
+        "eval_accuracy": float(acc),
+        "eval_precision": float(precision),
+        "eval_recall": float(recall),
+        "eval_f1": float(f1),
     }
 
     logger.info("***** Eval results *****")
@@ -261,7 +235,7 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
 
     return result
 
-def test(args, model, tokenizer, test_dataset, beta):
+def test(args, model, tokenizer, test_dataset):
     # build dataloader
     test_sampler = SequentialSampler(test_dataset)
     test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
@@ -274,21 +248,16 @@ def test(args, model, tokenizer, test_dataset, beta):
     logger.info("***** Running Test *****")
     logger.info("  Num examples = %d", len(test_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
-    eval_loss = 0.0
-    nb_eval_steps = 0
+    
     model.eval()
     y_preds=[]  
     y_trues=[]
-    global BEST_BETA
-    if BEST_BETA is None:
-        BEST_BETA = beta
     for batch in test_dataloader:
-        input_ids, labels, groups = [x.to(args.device) for x in batch]       
+        (input_ids, labels, groups) = [x.to(args.device) for x in batch]            
         with torch.no_grad():
-            probs = model(input_ids=input_ids, best_beta=BEST_BETA)            
-            y_preds += list((np.argmax(probs.cpu().numpy(), axis=1)))
+            prob = model(input_ids=input_ids, groups=groups, labels=labels, return_prob=True)
+            y_preds += list((np.argmax(prob.cpu().numpy(), axis=1)))
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))
-        nb_eval_steps += 1
     # calculate scores
     acc = accuracy_score(y_trues, y_preds)
     precision = precision_score(y_trues, y_preds, average='weighted')
@@ -299,12 +268,14 @@ def test(args, model, tokenizer, test_dataset, beta):
         "test_precision": float(precision),
         "test_recall": float(recall),
         "test_f1": float(f1),
-        "best_beta": BEST_BETA,
     }
+
 
     logger.info("***** Test results *****")
     for key in sorted(result.keys()):
         logger.info("  %s = %s", key, str(round(result[key],4)))
+
+
     return y_trues, y_preds
 
 def main():
@@ -315,15 +286,11 @@ def main():
     parser.add_argument("--output_dir", default=None, type=str,
                         help="The output directory where the model predictions and checkpoints will be written.")
     parser.add_argument("--use_logit_adjustment", action='store_true', default=False,
-                        help="Whether to use non-pretrained model.")
-    parser.add_argument("--use_hard_distil", action='store_true',
-                        help="Whether to use hard distil.")
-    parser.add_argument("--tau", default=1.2, type=float,
                         help="")
-    parser.add_argument("--alpha", default=0.5, type=float,
-                        help="")
-    parser.add_argument("--beta", default=None, type=float,
-                        help="")
+    parser.add_argument("--use_focal_loss", action='store_true', default=False,
+                        help="Whether to use focal loss")
+    parser.add_argument("--tau", default=1, type=float,
+                        help="The initial learning rate for Adam.")
     ## Other parameters
     parser.add_argument("--model_type", default="bert", type=str,
                         help="The model architecture to be fine-tuned.")
@@ -384,7 +351,6 @@ def main():
                         help="random seed for initialization")
     parser.add_argument('--epochs', type=int, default=1,
                         help="training epochs")
-    
     args = parser.parse_args()
     # Setup CUDA, GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -394,18 +360,15 @@ def main():
     with open("../../data/big_vul/cwe_label_map.pkl", "rb") as f:
         cwe_label_map = pickle.load(f)
     group_label_map = {"category": 0, "class": 1, "variant": 2, "base": 3, "deprecated": 4, "pillar": 5}
-
     # Setup logging
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',datefmt='%m/%d/%Y %H:%M:%S',level=logging.INFO)
     logger.warning("device: %s, n_gpu: %s",device, args.n_gpu,)
     # Set seed
     set_seed(args)
-    
     tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_name)
     tokenizer.add_tokens(["<dis>"])
     tokenizer.dis_token_id = tokenizer.encode("<dis>", add_special_tokens=False)[0]
     tokenizer.dis_token = "<dis>"
-
     codebert = RobertaModel.from_pretrained(args.model_name_or_path)
     codebert.resize_token_embeddings(len(tokenizer))
     cnn_model = TextCNN(roberta=codebert, 
@@ -415,33 +378,28 @@ def main():
                         dropout_rate=0.1, 
                         num_class=len(cwe_label_map),
                         args=args)
-    teacher_model = CNNTeacherModel(shared_model=cnn_model,
+    model = CNNTeacherModel(shared_model=cnn_model,
                             tokenizer=tokenizer,
                             num_labels=len(cwe_label_map),
                             args=args,
-                            hidden_size=300)    
-    
-    # teacher_model.load_state_dict(torch.load("./saved_models/checkpoint-best-acc/cnnteacher.bin", map_location=args.device), strict=False)
-    teacher_model.to(args.device)
-    
-    model = RobertaModel.from_pretrained(args.model_name_or_path)
-    model.resize_token_embeddings(len(tokenizer))
-    model = StudentBERT(encoder=model, tokenizer=tokenizer, config=model.config, num_labels=len(cwe_label_map), args=args)
+                            hidden_size=300)
+
     logger.info("Training/evaluation parameters %s", args)
-    
     # Training
     if args.do_train:
         train_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='train')
         eval_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='eval')
-        train(args, train_dataset, model, teacher_model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
+        train(args, train_dataset, model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
     # Evaluation
+    results = {}
     if args.do_test:
         checkpoint_prefix = f'checkpoint-best-acc/{args.model_name}'
         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
-        model.load_state_dict(torch.load(output_dir, map_location=args.device),strict=False)
+        model.load_state_dict(torch.load(output_dir, map_location=args.device))
         model.to(args.device)
         test_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='test')
-        y_trues, y_preds = test(args, model, tokenizer, test_dataset, beta=args.beta)
+        y_trues, y_preds = test(args, model, tokenizer, test_dataset)
+    return results
 
 if __name__ == "__main__":
     main()
