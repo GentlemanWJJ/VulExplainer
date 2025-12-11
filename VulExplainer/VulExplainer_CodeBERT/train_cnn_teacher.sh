@@ -3,13 +3,12 @@ python teacher_main.py \
     --model_name=train.bin \
     --tokenizer_name=microsoft/codebert-base \
     --model_name_or_path=microsoft/codebert-base \
-    --train_data_file=../../data/big_vul/train.csv \
-    --eval_data_file=../../data/big_vul/val.csv \
-    --test_data_file=../../data/big_vul/test.csv \
+    --train_data_file=../../data/big_vul/train.json \
+    --eval_data_file=../../data/big_vul/val.json \
+    --test_data_file=../../data/big_vul/test.json \
     --do_train \
-    --do_test \
     --block_size 512 \
-    --epochs 50 \
+    --epochs 10 \
     --train_batch_size 128 \
     --eval_batch_size 128 \
     --learning_rate 5e-3 \

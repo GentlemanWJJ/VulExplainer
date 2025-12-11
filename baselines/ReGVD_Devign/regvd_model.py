@@ -11,7 +11,7 @@ from utils import preprocess_features, preprocess_adj
 from utils import *
 from focal_loss import FocalLoss 
 
-device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Model(nn.Module):   
     def __init__(self, encoder,config,tokenizer,args):

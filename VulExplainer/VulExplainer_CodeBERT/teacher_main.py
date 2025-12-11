@@ -15,7 +15,7 @@ from textcnn_model import TextCNN
 from teacher_model import CNNTeacherModel
 import pandas as pd
 # metrics
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +30,18 @@ class InputFeatures(object):
         self.input_ids = input_ids
         self.label = label
         self.group = group
-        
+
 
 class TextDataset(Dataset):
-    def __init__(self, tokenizer, args, cwe_label_map, group_label_map, file_type="train"):
+    def __init__(
+        self,
+        tokenizer,
+        args,
+        cwe_label_map,
+        group_label_map,
+        file_type="train",
+        dataset="diversevul"
+    ):
         if file_type == "train":
             file_path = args.train_data_file
         elif file_type == "eval":
@@ -41,31 +49,71 @@ class TextDataset(Dataset):
         elif file_type == "test":
             file_path = args.test_data_file
         self.examples = []
-        df = pd.read_csv(file_path)
-        funcs = df["func_before"].tolist()
-        labels = df["CWE ID"].tolist()
-        groups = df["cwe_abstract_group"].tolist()
+        if dataset == "bigvul":
+            df = pd.read_csv(file_path)
+            funcs = df["func_before"].tolist()
+            labels = df["CWE ID"].tolist()
+            groups = df["cwe_abstract_group"].tolist()
+        elif dataset == "diversevul":
+            df = pd.read_json(file_path)
+            funcs = df["func"].tolist()
+            labels = df["cwe"].tolist()
         for i in tqdm(range(len(funcs))):
             label = cwe_label_map[labels[i]][1]
-            group_label = group_label_map[groups[i]]
-            # count label freq if it's training data
-            if file_type == "train":
-                cwe_label_map[labels[i]][2] += 1
-            self.examples.append(convert_examples_to_features(funcs[i], label, group_label, tokenizer, args))
+            group_label = 0
+            self.examples.append(
+                convert_examples_to_features(
+                    funcs[i], label, group_label, tokenizer, args
+                )
+            )
         if file_type == "train":
             self.cwe_label_map = cwe_label_map
-            for example in self.examples[:3]:
-                    logger.info("*** Example ***")
-                    logger.info("label: {}".format(example.label))
-                    logger.info("group: {}".format(example.group))
-                    logger.info("input_tokens: {}".format([x.replace('\u0120','_') for x in example.input_tokens]))
-                    logger.info("input_ids: {}".format(' '.join(map(str, example.input_ids))))
 
     def __len__(self):
         return len(self.examples)
 
-    def __getitem__(self, i):       
-        return torch.tensor(self.examples[i].input_ids), torch.tensor(self.examples[i].label).float(), torch.tensor(self.examples[i].group)
+    def __getitem__(self, i):
+        return (
+            torch.tensor(self.examples[i].input_ids),
+            torch.tensor(self.examples[i].label).float(),
+            torch.tensor(self.examples[i].group),
+        )
+
+
+# class TextDataset(Dataset):
+#     def __init__(self, tokenizer, args, cwe_label_map, group_label_map, file_type="train"):
+#         if file_type == "train":
+#             file_path = args.train_data_file
+#         elif file_type == "eval":
+#             file_path = args.eval_data_file
+#         elif file_type == "test":
+#             file_path = args.test_data_file
+#         self.examples = []
+#         df = pd.read_csv(file_path)
+#         funcs = df["func_before"].tolist()
+#         labels = df["CWE ID"].tolist()
+#         groups = df["cwe_abstract_group"].tolist()
+#         for i in tqdm(range(len(funcs))):
+#             label = cwe_label_map[labels[i]][1]
+#             group_label = group_label_map[groups[i]]
+#             # count label freq if it's training data
+#             if file_type == "train":
+#                 cwe_label_map[labels[i]][2] += 1
+#             self.examples.append(convert_examples_to_features(funcs[i], label, group_label, tokenizer, args))
+#         if file_type == "train":
+#             self.cwe_label_map = cwe_label_map
+#             for example in self.examples[:3]:
+#                     logger.info("*** Example ***")
+#                     logger.info("label: {}".format(example.label))
+#                     logger.info("group: {}".format(example.group))
+#                     logger.info("input_tokens: {}".format([x.replace('\u0120','_') for x in example.input_tokens]))
+#                     logger.info("input_ids: {}".format(' '.join(map(str, example.input_ids))))
+
+#     def __len__(self):
+#         return len(self.examples)
+
+#     def __getitem__(self, i):
+#         return torch.tensor(self.examples[i].input_ids), torch.tensor(self.examples[i].label).float(), torch.tensor(self.examples[i].group)
 
 def convert_examples_to_features(func, label, group_label, tokenizer, args):
     #source
@@ -193,9 +241,9 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                         output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
-                        
+
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
-    #build dataloader
+    # build dataloader
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
 
@@ -216,11 +264,16 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
             prob = model(input_ids=input_ids, groups=groups, labels=labels, return_prob=True)
             y_preds += list((np.argmax(prob.cpu().numpy(), axis=1)))
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))    
-    # calculate scores    
+    # calculate scores
     acc = accuracy_score(y_trues, y_preds)
-    
+    precision = precision_score(y_trues, y_preds, average="weighted")
+    recall = recall_score(y_trues, y_preds, average="weighted")
+    f1 = f1_score(y_trues, y_preds, average="weighted")
     result = {
         "eval_acc": float(acc),
+        "eval_precision": float(precision),
+        "eval_recall": float(recall),
+        "eval_f1": float(f1),
     }
 
     logger.info("***** Eval results *****")
@@ -242,7 +295,7 @@ def test(args, model, tokenizer, test_dataset):
     logger.info("***** Running Test *****")
     logger.info("  Num examples = %d", len(test_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
-    
+
     model.eval()
     y_preds=[]  
     y_trues=[]
@@ -254,19 +307,25 @@ def test(args, model, tokenizer, test_dataset):
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))
     # calculate scores
     acc = accuracy_score(y_trues, y_preds)
+    precision = precision_score(y_trues, y_preds, average="weighted")
+    recall = recall_score(y_trues, y_preds, average="weighted")
+    f1 = f1_score(y_trues, y_preds, average="weighted")
     result = {
         "test_accuracy": float(acc),
+        "test_precision": float(precision),
+        "test_recall": float(recall),
+        "test_f1": float(f1),
     }
 
     logger.info("***** Test results *****")
     for key in sorted(result.keys()):
         logger.info("  %s = %s", key, str(round(result[key],4)))
 
-    df = pd.read_csv(args.test_data_file)
-    df["y_trues"] = y_trues
-    df["y_preds"] = y_preds
-    df.to_csv("./raw_prediction/teacher_preds.csv")
-    print("done writing predictions")
+    # df = pd.read_csv(args.test_data_file)
+    # df["y_trues"] = y_trues
+    # df["y_preds"] = y_preds
+    # df.to_csv("./raw_prediction/teacher_preds.csv")
+    # print("done writing predictions")
 
     return y_trues, y_preds
 

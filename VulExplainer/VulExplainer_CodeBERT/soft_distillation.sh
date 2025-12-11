@@ -1,19 +1,19 @@
 python student_codebert_main.py \
-    --alpha 1.0 \
+    --alpha 0.7 \
     --output_dir=./saved_models \
-    --model_name=soft_distil_model_07.bin \
-    --tokenizer_name=Salesforce/codet5p-110m-embedding \
-    --model_name_or_path=Salesforce/codet5p-110m-embedding \
-    --train_data_file=../../data/big_vul/train.csv \
-    --eval_data_file=../../data/big_vul/val.csv \
-    --test_data_file=../../data/big_vul/test.csv \
+    --model_name=soft_distil_model.bin \
+    --tokenizer_name=microsoft/codebert-base \
+    --model_name_or_path=microsoft/codebert-base \
+    --train_data_file=../../data/big_vul/train.json \
+    --eval_data_file=../../data/big_vul/val.json \
+    --test_data_file=../../data/big_vul/test.json \
     --do_train \
     --do_test \
     --block_size 512 \
     --epochs 50 \
-    --train_batch_size 8 \
-    --eval_batch_size 8 \
-    --learning_rate 2e-5 \
+    --train_batch_size 16 \
+    --eval_batch_size 16 \
+    --learning_rate 5e-5 \
     --max_grad_norm 1.0 \
     --evaluate_during_training \
     --seed 123456  2>&1 | tee train_soft_distil_alpha07.log

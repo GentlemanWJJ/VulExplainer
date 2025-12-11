@@ -36,10 +36,18 @@ class InputFeatures(object):
         self.input_ids = input_ids
         self.label=label
         self.group = group
-        
+
 
 class TextDataset(Dataset):
-    def __init__(self, tokenizer, args, cwe_label_map, group_label_map, file_type="train"):
+    def __init__(
+        self,
+        tokenizer,
+        args,
+        cwe_label_map,
+        group_label_map,
+        file_type="train",
+        dataset="diversevul",
+    ):
         if file_type == "train":
             file_path = args.train_data_file
         elif file_type == "eval":
@@ -47,30 +55,70 @@ class TextDataset(Dataset):
         elif file_type == "test":
             file_path = args.test_data_file
         self.examples = []
-        df = pd.read_csv(file_path)
-        funcs = df["func_before"].tolist()
-        labels = df["CWE ID"].tolist()
-        groups = df["cwe_abstract_group"].tolist()
+        if dataset == "bigvul":
+            df = pd.read_csv(file_path)
+            funcs = df["func_before"].tolist()
+            labels = df["CWE ID"].tolist()
+            groups = df["cwe_abstract_group"].tolist()
+        elif dataset == "diversevul":
+            df = pd.read_json(file_path)
+            funcs = df["func"].tolist()
+            labels = df["cwe"].tolist()
         for i in tqdm(range(len(funcs))):
             label = cwe_label_map[labels[i]][1]
-            # count label freq if it's training data
-            if file_type == "train":
-                cwe_label_map[labels[i]][2] += 1
-            self.examples.append(convert_examples_to_features(funcs[i], label, group_label_map[groups[i]], tokenizer, args))
+            group_label = 0
+            self.examples.append(
+                convert_examples_to_features(
+                    funcs[i], label, group_label, tokenizer, args
+                )
+            )
         if file_type == "train":
             self.cwe_label_map = cwe_label_map
-            for example in self.examples[:3]:
-                    logger.info("*** Example ***")
-                    logger.info("label: {}".format(example.label))
-                    logger.info("input_ids: {}".format(' '.join(map(str, example.input_ids))))
-                    logger.info("group: {}".format(example.group))
-                    logger.info("input_tokens: {}".format([x.replace('\u0120','_') for x in example.input_tokens]))
 
     def __len__(self):
         return len(self.examples)
 
-    def __getitem__(self, i):       
-        return torch.tensor(self.examples[i].input_ids), torch.tensor(self.examples[i].label).float(), torch.tensor(self.examples[i].group)
+    def __getitem__(self, i):
+        return (
+            torch.tensor(self.examples[i].input_ids),
+            torch.tensor(self.examples[i].label).float(),
+            torch.tensor(self.examples[i].group),
+        )
+
+
+# class TextDataset(Dataset):
+#     def __init__(self, tokenizer, args, cwe_label_map, group_label_map, file_type="train"):
+#         if file_type == "train":
+#             file_path = args.train_data_file
+#         elif file_type == "eval":
+#             file_path = args.eval_data_file
+#         elif file_type == "test":
+#             file_path = args.test_data_file
+#         self.examples = []
+#         df = pd.read_csv(file_path)
+#         funcs = df["func_before"].tolist()
+#         labels = df["CWE ID"].tolist()
+#         groups = df["cwe_abstract_group"].tolist()
+#         for i in tqdm(range(len(funcs))):
+#             label = cwe_label_map[labels[i]][1]
+#             # count label freq if it's training data
+#             if file_type == "train":
+#                 cwe_label_map[labels[i]][2] += 1
+#             self.examples.append(convert_examples_to_features(funcs[i], label, group_label_map[groups[i]], tokenizer, args))
+#         if file_type == "train":
+#             self.cwe_label_map = cwe_label_map
+#             for example in self.examples[:3]:
+#                     logger.info("*** Example ***")
+#                     logger.info("label: {}".format(example.label))
+#                     logger.info("input_ids: {}".format(' '.join(map(str, example.input_ids))))
+#                     logger.info("group: {}".format(example.group))
+#                     logger.info("input_tokens: {}".format([x.replace('\u0120','_') for x in example.input_tokens]))
+
+#     def __len__(self):
+#         return len(self.examples)
+
+#     def __getitem__(self, i):       
+#         return torch.tensor(self.examples[i].input_ids), torch.tensor(self.examples[i].label).float(), torch.tensor(self.examples[i].group)
 
 def convert_examples_to_features(func, label, group, tokenizer, args):
     # input ids
@@ -204,7 +252,7 @@ def train(args, train_dataset, model, teacher_model, tokenizer, eval_dataset, cw
                         output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
-                        
+
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     #build dataloader
     eval_sampler = SequentialSampler(eval_dataset)
@@ -421,7 +469,7 @@ def main():
                             args=args,
                             hidden_size=300)    
     
-    # teacher_model.load_state_dict(torch.load("./saved_models/checkpoint-best-acc/cnnteacher.bin", map_location=args.device), strict=False)
+    teacher_model.load_state_dict(torch.load("./saved_models/checkpoint-best-acc/cnnteacher.bin", map_location=args.device), strict=False)
     teacher_model.to(args.device)
     
     model = RobertaModel.from_pretrained(args.model_name_or_path)
@@ -431,8 +479,8 @@ def main():
     
     # Training
     if args.do_train:
-        train_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='train')
-        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='eval')
+        train_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='train',dataset='diversevul')
+        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='eval',dataset='diversevul')
         train(args, train_dataset, model, teacher_model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
     # Evaluation
     if args.do_test:
@@ -440,7 +488,7 @@ def main():
         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
         model.load_state_dict(torch.load(output_dir, map_location=args.device),strict=False)
         model.to(args.device)
-        test_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='test')
+        test_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='test',dataset='diversevul')
         y_trues, y_preds = test(args, model, tokenizer, test_dataset, beta=args.beta)
 
 if __name__ == "__main__":

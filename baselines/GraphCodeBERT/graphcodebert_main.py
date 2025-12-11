@@ -9,8 +9,10 @@ import re
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
-from transformers import (AdamW, get_linear_schedule_with_warmup,
+from transformers import (get_linear_schedule_with_warmup,
                           RobertaConfig, RobertaTokenizer, RobertaModel)
+from torch.optim import AdamW
+
 from tqdm import tqdm
 import multiprocessing
 from graphcodebert_model import Model
@@ -31,7 +33,7 @@ dfg_function={
     'c_sharp':DFG_csharp,
 }
 
-#load parsers
+# load parsers
 parsers={}        
 for lang in dfg_function:
     LANGUAGE = Language('parser/my-languages.so', lang)
@@ -60,8 +62,11 @@ class InputFeatures(object):
         self.source_mask = source_mask
         self.labels = labels        
 
+
+
+
 class TextDataset(Dataset):
-    def __init__(self, tokenizer, args, cwe_label_map, file_type="train"):
+    def __init__(self, tokenizer, args, cwe_label_map, file_type,dataset):
         self.args = args
         if file_type == "train":
             file_path = args.train_data_file
@@ -69,9 +74,14 @@ class TextDataset(Dataset):
             file_path = args.eval_data_file
         elif file_type == "test":
             file_path = args.test_data_file
-        df = pd.read_csv(file_path)
-        funcs = df["func_before"].tolist()
-        labels = df["CWE ID"].tolist()
+        if dataset == "bigvul":
+            df = pd.read_csv(file_path)
+            funcs = df["func_before"].tolist()
+            labels = df["CWE ID"].tolist()
+        elif dataset == "diversevul":
+            df = pd.read_json(file_path)
+            funcs = df["func"].tolist()
+            labels = df["cwe"].tolist()
         one_hot_labels = []
         for i in tqdm(range(len(labels))):
             # count label freq if it's training data
@@ -82,38 +92,37 @@ class TextDataset(Dataset):
         if file_type == "train":
             self.cwe_label_map = cwe_label_map
             for example in self.examples[:3]:
-                    logger.info("*** Example ***")
-                    logger.info("label: {}".format(example.labels))
-                    logger.info("source_ids: {}".format(' '.join(map(str, example.source_ids))))
-                    logger.info("position_idx: {}".format(' '.join(map(str, example.position_idx))))
-
+                logger.info("*** Example ***")
+                logger.info("label: {}".format(example.labels))
+                logger.info("source_ids: {}".format(' '.join(map(str, example.source_ids))))
+                logger.info("position_idx: {}".format(' '.join(map(str, example.position_idx))))
 
     def __len__(self):
         return len(self.examples)
 
     def __getitem__(self, item):
-        #calculate graph-guided masked function
+        # calculate graph-guided masked function
         attn_mask=np.zeros((self.args.block_size,self.args.block_size),dtype=np.bool_)
-        #calculate begin index of node and max length of input
+        # calculate begin index of node and max length of input
         node_index=sum([i>1 for i in self.examples[item].position_idx])
         max_length=sum([i!=1 for i in self.examples[item].position_idx])
-        #sequence can attend to sequence
+        # sequence can attend to sequence
         attn_mask[:node_index,:node_index]=True
-        #special tokens attend to all tokens
+        # special tokens attend to all tokens
         for idx,i in enumerate(self.examples[item].source_ids):
             if i in [0,2]:
                 attn_mask[idx,:max_length]=True
-        #nodes attend to code tokens that are identified from
+        # nodes attend to code tokens that are identified from
         for idx,(a,b) in enumerate(self.examples[item].dfg_to_code):
             if a<node_index and b<node_index:
                 attn_mask[idx+node_index,a:b]=True
                 attn_mask[a:b,idx+node_index]=True
-        #nodes attend to adjacent nodes         
+        # nodes attend to adjacent nodes
         for idx,nodes in enumerate(self.examples[item].dfg_to_dfg):
             for a in nodes:
                 if a+node_index<len(self.examples[item].position_idx):
                     attn_mask[idx+node_index,a+node_index]=True  
-                    
+
         return (torch.tensor(self.examples[item].source_ids),
                 torch.tensor(self.examples[item].source_mask),
                 torch.tensor(self.examples[item].position_idx),
@@ -173,7 +182,7 @@ def convert_examples_to_features(examples, labels, tokenizer, args):
         )
     return features
 
-#remove comments, tokenize code and extract dataflow     
+# remove comments, tokenize code and extract dataflow
 def extract_dataflow(code, parser,lang):
     #remove comments
     try:
@@ -334,7 +343,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                         output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
-                        
+
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     #build dataloader
     eval_sampler = SequentialSampler(eval_dataset)
@@ -490,7 +499,7 @@ def main():
                         help="training epochs")
     args = parser.parse_args()
     # Setup CUDA, GPU
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.n_gpu = 1 #torch.cuda.device_count()
     args.device = device
 
@@ -510,8 +519,8 @@ def main():
     
     # Training
     if args.do_train:
-        train_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='train')
-        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='eval')
+        train_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='train', dataset="diversevul")
+        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='eval', dataset="diversevul")
         train(args, train_dataset, model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
     # Evaluation
     results = {}
@@ -520,7 +529,7 @@ def main():
         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
         model.load_state_dict(torch.load(output_dir, map_location=args.device))
         model.to(args.device)
-        test_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='test')
+        test_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='test', dataset="diversevul")
         y_trues, y_preds = test(args, model, tokenizer, test_dataset)
     return results
 

@@ -20,18 +20,20 @@ class RobertaClassificationHead(nn.Module):
         x = self.dropout(x)
         x = self.out_proj(x)
         return x
-        
+
 class Model(RobertaForSequenceClassification):   
     def __init__(self, encoder, config, tokenizer, args, num_labels):
         super(Model, self).__init__(config=config)
         self.encoder = encoder
         self.tokenizer = tokenizer
         self.classifier = RobertaClassificationHead(config, num_labels)
+        self.fc=nn.Linear(config.hidden_size, num_labels)
         self.args = args
-    
+
     def forward(self, input_ids, labels=None, logit_adjustment=None, focal_loss=False):
         outputs = self.encoder(input_ids, attention_mask=input_ids.ne(self.tokenizer.pad_token_id)).last_hidden_state
-        logits = self.classifier(outputs)
+        # logits = self.classifier(outputs)
+        logits = self.fc(outputs[:, 0, :])  # Use the representation of [CLS] token
         prob = torch.softmax(logits, dim=-1)
         if labels is not None:
             if logit_adjustment is not None:

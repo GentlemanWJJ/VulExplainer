@@ -29,13 +29,14 @@ import pandas as pd
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 from tqdm import tqdm
 import multiprocessing
 from regvd_model import *
 cpu_cont = multiprocessing.cpu_count()
-from transformers import (AdamW, get_linear_schedule_with_warmup,
+from transformers import (get_linear_schedule_with_warmup,
                           RobertaModel, RobertaConfig, RobertaTokenizer)
+from torch.optim import AdamW
 
 logger = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class InputFeatures(object):
         self.input_tokens = input_tokens
         self.input_ids = input_ids
         self.label = label
-      
+
 def convert_examples_to_features(code, label, tokenizer, args):
     #source
     code_tokens = tokenizer.tokenize(code)[:args.block_size-2]
@@ -116,7 +117,7 @@ class TextDataset(Dataset):
 
     def __getitem__(self, i):       
         return torch.tensor(self.examples[i].input_ids), torch.tensor(self.examples[i].label).float()
-            
+
 
 def set_seed(args):
     random.seed(args.seed)
@@ -226,9 +227,9 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                         output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
-                        
+
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
-    #build dataloader
+    # build dataloader
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
 
@@ -240,7 +241,7 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     logger.info("***** Running evaluation *****")
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
-    
+
     eval_loss = 0.0
     nb_eval_steps = 0
     model.eval()
@@ -254,14 +255,19 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
             y_preds += list((np.argmax(prob.cpu().numpy(), axis=1)))
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))
         nb_eval_steps += 1
-    
-    #calculate scores
+
+    # calculate scores
     best_acc = 0
-    
+
     acc = accuracy_score(y_trues, y_preds)
-    
+    precision = precision_score(y_trues, y_preds, average="weighted")
+    recall = recall_score(y_trues, y_preds, average="weighted")
+    f1 = f1_score(y_trues, y_preds, average="weighted")
     result = {
         "eval_acc": float(acc),
+        "eval_precision": float(precision),
+        "eval_recall": float(recall),
+        "eval_f1": float(f1),
     }
 
     logger.info("***** Eval results *****")
@@ -298,15 +304,21 @@ def test(args, model, tokenizer, test_dataset, best_threshold=0.5):
         nb_eval_steps += 1
     # calculate scores
     acc = accuracy_score(y_trues, y_preds)
+    precision = precision_score(y_trues, y_preds, average="weighted")
+    recall = recall_score(y_trues, y_preds, average="weighted")
+    f1 = f1_score(y_trues, y_preds, average="weighted")
     result = {
         "test_accuracy": float(acc),
+        "test_precision": float(precision),
+        "test_recall": float(recall),
+        "test_f1": float(f1),
     }
 
     logger.info("***** Test results *****")
     for key in sorted(result.keys()):
         logger.info("  %s = %s", key, str(round(result[key],4)))
     return y_trues, y_preds
-                        
+
 def main():
     parser = argparse.ArgumentParser()
 
@@ -401,7 +413,7 @@ def main():
                         help="training epochs")
     args = parser.parse_args()
     # Setup CUDA, GPU
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.n_gpu = 1 
     args.device = device
     
@@ -444,5 +456,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

@@ -9,8 +9,10 @@ import re
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
-from transformers import (AdamW, get_linear_schedule_with_warmup,
+from transformers import (get_linear_schedule_with_warmup,
                           RobertaConfig, RobertaTokenizer, RobertaModel)
+from torch.optim import AdamW
+
 from tqdm import tqdm
 from codebert_model import Model
 import pandas as pd
@@ -32,10 +34,10 @@ class InputFeatures(object):
         self.input_tokens = input_tokens
         self.input_ids = input_ids
         self.label=label
-        
+
 
 class TextDataset(Dataset):
-    def __init__(self, tokenizer, args, cwe_label_map, file_type="train"):
+    def __init__(self, tokenizer, args, cwe_label_map, file_type,dataset):
         if file_type == "train":
             file_path = args.train_data_file
         elif file_type == "eval":
@@ -43,9 +45,15 @@ class TextDataset(Dataset):
         elif file_type == "test":
             file_path = args.test_data_file
         self.examples = []
-        df = pd.read_csv(file_path)
-        funcs = df["func_before"].tolist()
-        labels = df["CWE ID"].tolist()
+        if dataset == "bigvul":
+            df = pd.read_csv(file_path)
+            funcs = df["func_before"].tolist()
+            labels = df["CWE ID"].tolist()
+            groups = df["cwe_abstract_group"].tolist()
+        elif dataset == "diversevul":
+            df = pd.read_json(file_path)
+            funcs = df["func"].tolist()
+            labels = df["cwe"].tolist()
         for i in tqdm(range(len(funcs))):
             label = cwe_label_map[labels[i]][1]
             # count label freq if it's training data
@@ -198,7 +206,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                         output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
-                        
+
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     #build dataloader
     eval_sampler = SequentialSampler(eval_dataset)
@@ -344,7 +352,7 @@ def main():
                         help="training epochs")
     args = parser.parse_args()
     # Setup CUDA, GPU
-    device = torch.device("cuda:1" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     args.n_gpu = 1
     args.device = device
 
@@ -364,8 +372,8 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
     # Training
     if args.do_train:
-        train_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='train')
-        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='eval')
+        train_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='train', dataset="diversevul")
+        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='eval', dataset="diversevul")
         train(args, train_dataset, model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
     # Evaluation
     results = {}
@@ -373,8 +381,8 @@ def main():
         checkpoint_prefix = f'checkpoint-best-acc/{args.model_name}'
         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
         model.load_state_dict(torch.load(output_dir, map_location=args.device))
-        model.to(args.device)
-        test_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='test')
+        model.to(args.device)#type:ignore
+        test_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='test', dataset="diversevul")
         y_trues, y_preds = test(args, model, tokenizer, test_dataset)
     return results
 
