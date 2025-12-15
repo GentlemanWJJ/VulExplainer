@@ -14,25 +14,7 @@ class DPCNN(nn.Module):
         self.tokenizer = tokenizer
         self.args = args
         emb_dim = encoder.config.hidden_size
-        # Transformer编码层超参，默认开启以增强序列上下文建模
-        self.use_transformer = getattr(args, "use_transformer", True)
-        if self.use_transformer:
-            transformer_nhead = getattr(args, "transformer_nhead", 8)
-            transformer_ffn_dim = getattr(args, "transformer_ffn_dim", emb_dim * 4)
-            transformer_num_layers = getattr(args, "transformer_num_layers", 2)
-            transformer_dropout = getattr(args, "transformer_dropout", 0.1)
-            encoder_layer = nn.TransformerEncoderLayer(
-                d_model=emb_dim,
-                nhead=transformer_nhead,
-                dim_feedforward=transformer_ffn_dim,
-                dropout=transformer_dropout,
-                batch_first=False,
-            )
-            self.transformer = nn.TransformerEncoder(
-                encoder_layer, num_layers=transformer_num_layers
-            )
-        else:
-            self.transformer = None
+
 
         # 初始卷积层
         self.initial_conv = nn.Conv2d(1, dim_channel, (3, emb_dim), padding=(1, 0))
@@ -66,15 +48,7 @@ class DPCNN(nn.Module):
             input_ids.ne(self.tokenizer.pad_token_id).unsqueeze(-1).expand_as(emb_x)
         )
 
-        # 可选的Transformer编码，提升上下文依赖建模
-        if self.use_transformer and self.transformer is not None:
-            # Transformer使用batch第二维，需转置
-            key_padding_mask = input_ids.eq(self.tokenizer.pad_token_id)
-            transformer_inp = emb_x.transpose(0, 1)  # [seq_len, batch, emb_dim]
-            transformer_out = self.transformer(
-                transformer_inp, src_key_padding_mask=key_padding_mask
-            )
-            emb_x = transformer_out.transpose(0, 1)
+
 
         emb_x = emb_x * attention_mask  # [batch_size, seq_len, emb_dim]
 

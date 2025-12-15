@@ -34,9 +34,7 @@ class FusionModel(nn.Module):
         self.encoder = encoder
         self.tokenizer = tokenizer
         self.args = args
-        # Transformer分支默认开启，可通过args.use_transformer控制
-        if not hasattr(self.args, "use_transformer"):
-            self.args.use_transformer = True
+
         self.dpcnn_out_dim = args.hidden_size  # DPCNN的通道维度
         self.regcn_out_dim = args.hidden_size 
         self.num_class = num_class
@@ -59,7 +57,7 @@ class FusionModel(nn.Module):
             dropout=0.1,
         )
         # 特征融合分类头
-        self.fusion_dim = self.dpcnn_out_dim + self.regcn_out_dim
+        # self.fusion_dim = self.dpcnn_out_dim + self.regcn_out_dim
         self.fusion_dim = self.dpcnn_out_dim
         # self.classifier = nn.Sequential(
         #     nn.Linear(self.fusion_dim, self.fusion_dim),
@@ -72,28 +70,27 @@ class FusionModel(nn.Module):
 
     def forward(self, input_ids,labels):
         # 获取DPCNN的特征（使用return_hidden_state参数获取池化后的特征）
-        dpcnn_features = self.dpcnn(input_ids)  # [batch_size, dim_channel]
+        # dpcnn_features = self.dpcnn(input_ids)  # [batch_size, dim_channel]
 
-        # # 获取ReGCN的特征（通过修改GNNReGVD的forward方法支持返回特征）
-        # adj, x_feature = build_graph(input_ids.cpu().detach().numpy(), self.w_embeddings, window_size=self.args.window_size)
-        # adj, adj_mask = preprocess_adj(adj)
-        # adj_feature = preprocess_features(x_feature)
-        # adj = torch.from_numpy(adj)
-        # adj_mask = torch.from_numpy(adj_mask)
-        # adj_feature = torch.from_numpy(adj_feature)
-        # regcn_features = self.regcn(
-        #     adj_feature.to(device).double(),
-        #     adj.to(device).double(),
-        #     adj_mask.to(device).double(),
-        # )  # [batch_size, regcn_out_dim]
+        # 获取ReGCN的特征（通过修改GNNReGVD的forward方法支持返回特征）
+        adj, x_feature = build_graph(input_ids.cpu().detach().numpy(), self.w_embeddings, window_size=self.args.window_size)
+        adj, adj_mask = preprocess_adj(adj)
+        adj_feature = preprocess_features(x_feature)
+        adj = torch.from_numpy(adj)
+        adj_mask = torch.from_numpy(adj_mask)
+        adj_feature = torch.from_numpy(adj_feature)
+        regcn_features = self.regcn(
+            adj_feature.to(device).double(),
+            adj.to(device).double(),
+            adj_mask.to(device).double(),
+        )  # [batch_size, regcn_out_dim]
 
-        # 特征融合（拼接）
         # fused_features = torch.cat(
         #     [dpcnn_features, regcn_features], dim=1
         # ).float()  # [batch_size, fusion_dim]
-        fused_features = dpcnn_features
+        fused_features = regcn_features
         # 分类预测
-        logits = self.classifier(fused_features)  # [batch_size, num_class]
+        logits = self.classifier(fused_features.float())  # [batch_size, num_class]
 
         if labels is not None:
             loss_fct = nn.CrossEntropyLoss()

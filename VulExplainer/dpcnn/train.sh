@@ -11,8 +11,8 @@ python teacher_main.py \
     --do_test \
     --block_size 512 \
     --epochs 20 \
-    --train_batch_size 64 \
-    --eval_batch_size 64 \
+    --train_batch_size 16 \
+    --eval_batch_size 16 \
     --learning_rate 5e-3 \
     --max_grad_norm 1.0 \
     --evaluate_during_training \
