@@ -14,14 +14,13 @@ class ReGCN(nn.Module):
         self,
         feature_dim_size,
         hidden_size,
-        num_GNN_layers,
         dropout,
         act=nn.functional.relu,
         residual=True,
         att_op="mul",
     ):
         super(ReGCN, self).__init__()
-        self.num_GNN_layers = num_GNN_layers
+        self.num_GNN_layers = 2
         self.residual = residual
         self.att_op = att_op
         self.out_dim = hidden_size

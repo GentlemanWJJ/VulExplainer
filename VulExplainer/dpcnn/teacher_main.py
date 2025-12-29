@@ -12,8 +12,9 @@ from transformers import ( get_linear_schedule_with_warmup, RobertaTokenizer, Ro
 from torch.optim import AdamW
 
 from tqdm import tqdm
-from teacher_model import CNNTeacherModel
 from model import FusionModel
+from model_advanced import AdvancedFusionModel
+
 import pandas as pd
 # metrics
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -34,7 +35,7 @@ class InputFeatures(object):
 
 
 class TextDataset(Dataset):
-    def __init__(self, tokenizer, args, cwe_label_map, group_label_map, file_type="train",dataset="diversevul"):
+    def __init__(self, tokenizer, args, cwe_label_map, group_label_map, file_type="train",dataset="json"):
         if file_type == "train":
             file_path = args.train_data_file
         elif file_type == "eval":
@@ -42,12 +43,12 @@ class TextDataset(Dataset):
         elif file_type == "test":
             file_path = args.test_data_file
         self.examples = []
-        if dataset=="bigvul":
+        if dataset=="csv":
             df = pd.read_csv(file_path)
             funcs = df["func_before"].tolist()
             labels = df["CWE ID"].tolist()
             groups = df["cwe_abstract_group"].tolist()
-        elif dataset=="diversevul":
+        elif dataset == "json":
             df = pd.read_json(file_path)
             funcs = df["func"].tolist()
             labels = df["cwe"].tolist()
@@ -57,7 +58,6 @@ class TextDataset(Dataset):
             self.examples.append(convert_examples_to_features(funcs[i], label, group_label, tokenizer, args))
         if file_type == "train":
             self.cwe_label_map = cwe_label_map
-
 
     def __len__(self):
         return len(self.examples)
@@ -100,7 +100,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
     # build dataloader
     train_sampler = RandomSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=0)
-    
+
     if args.use_logit_adjustment:
         logit_adjustment = compute_adjustment(tau=args.tau, args=args, cwe_label_map=cwe_label_map)
     else:
@@ -127,7 +127,13 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
     if args.n_gpu > 1:
         model = torch.nn.DataParallel(model)
 
-    # Train!
+    # Early stopping parameters
+    early_stopping_patience = getattr(args, 'early_stopping_patience', 3)
+    early_stopping_metric = 'eval_acc'
+    patience_counter = 0
+    best_acc = 0
+    best_model_state_dict = None
+
     logger.info("***** Running training *****")
     logger.info("  Num examples = %d", len(train_dataset))
     logger.info("  Num Epochs = %d", args.epochs)
@@ -135,15 +141,19 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
     logger.info("  Total train batch size = %d",args.train_batch_size*args.gradient_accumulation_steps)
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", args.max_steps)
-    
+    logger.info("  Early stopping patience = %d", early_stopping_patience)
+
     global_step=0
     tr_loss, logging_loss, avg_loss, tr_nb, tr_num, train_loss = 0.0, 0.0, 0.0, 0, 0, 0
-    best_acc=0
 
     model.zero_grad()
 
+    stop_training = False
     for idx in range(args.epochs): 
-        bar = tqdm(train_dataloader,total=len(train_dataloader))
+        if stop_training:
+            logger.info("Early stopping triggered. End training at epoch %d.", idx)
+            break
+        bar = tqdm(train_dataloader, total=len(train_dataloader))
         tr_num = 0
         train_loss = 0
         for step, batch in enumerate(bar):
@@ -161,7 +171,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
             train_loss += loss.item()
             if avg_loss == 0:
                 avg_loss = tr_loss
-                
+
             avg_loss = round(train_loss/tr_num,5)
             bar.set_description("epoch {} loss {}".format(idx,avg_loss))
               
@@ -175,14 +185,16 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
 
                 if global_step % args.save_steps == 0:
                     results = evaluate(args, model, tokenizer, eval_dataset, eval_when_training=True)    
-                    
-                    # Save model checkpoint
-                    if results['eval_acc']>best_acc:
-                        best_acc=results['eval_acc']
+
+                    # Early stopping logic
+                    cur_acc = results.get(early_stopping_metric, 0)
+                    if cur_acc > best_acc:
+                        best_acc = cur_acc
+                        patience_counter = 0
                         logger.info("  "+"*"*20)  
                         logger.info("  Best Acc:%s",round(best_acc,4))
                         logger.info("  "+"*"*20)                          
-                        
+                        # Save model checkpoint
                         checkpoint_prefix = 'checkpoint-best-acc'
                         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))                        
                         if not os.path.exists(output_dir):
@@ -191,6 +203,14 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                         output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
+                    else:
+                        patience_counter += 1
+                        logger.info("Early stopping patience counter: %d/%d", patience_counter, early_stopping_patience)
+                        if patience_counter >= early_stopping_patience:
+                            logger.info("Early stopping: no improvement after %d checkpoints. Stopping training.", early_stopping_patience)
+                            stop_training = True
+                            break
+
 
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     # build dataloader
@@ -355,6 +375,9 @@ def main():
     parser.add_argument(
         "--window_size", default=3, type=int, help="window_size to build graph"
     )
+    parser.add_argument(
+        "--early_stopping_patience", default=3, type=int, help="Number of evaluations after which training will stop if no improvement."
+    )
 
     args = parser.parse_args()
     # Setup CUDA, GPU
@@ -416,6 +439,16 @@ def main():
         args=args,
         num_class=len(cwe_label_map)
     )
+    # model = AdvancedFusionModel(
+    #     encoder=codebert,
+    #     tokenizer=tokenizer,
+    #     args=args,
+    #     num_class=len(cwe_label_map),
+    #     classifier_type="label_aware",
+    # )
+    # choices=['linear', 'mlp', 'attention', 'residual',
+    #                            'transformer', 'label_aware', 'contrastive',
+    #                            'hierarchical', 'capsule']
     logger.info("Training/evaluation parameters %s", args)
     # Training
     if args.do_train:

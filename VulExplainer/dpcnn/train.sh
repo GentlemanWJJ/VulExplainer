@@ -3,20 +3,19 @@ python teacher_main.py \
     --model_name=train.bin \
     --tokenizer_name=microsoft/codebert-base \
     --model_name_or_path=microsoft/codebert-base \
-    --train_data_file=../../data/big_vul/train.csv \
-    --eval_data_file=../../data/big_vul/val.csv \
-    --test_data_file=../../data/big_vul/test.csv \
-    --dataset=bigvul \
+    --train_data_file=../../data/bigvul/train.json \
+    --eval_data_file=../../data/bigvul/val.json \
+    --test_data_file=../../data/bigvul/test.json \
+    --dataset=json \
     --do_train \
     --do_test \
     --block_size 512 \
     --epochs 20 \
     --train_batch_size 16 \
     --eval_batch_size 16 \
-    --learning_rate 5e-3 \
+    --learning_rate 2e-4 \
     --max_grad_norm 1.0 \
     --evaluate_during_training \
     --hidden_size 256 \
-    --num_GNN_layers 2 \
-    --window_size 3 \
+    --early_stopping_patience 10 \
     --seed 123456  2>&1 | tee train_cnn_teacher.log
