@@ -12,8 +12,7 @@ from transformers import ( get_linear_schedule_with_warmup, RobertaTokenizer, Ro
 from torch.optim import AdamW
 
 from tqdm import tqdm
-from model import FusionModel
-from model_advanced import AdvancedFusionModel
+from DPCNN import DPCNN
 
 import pandas as pd
 # metrics
@@ -399,56 +398,15 @@ def main():
     tokenizer.dis_token = "<dis>"
     codebert = RobertaModel.from_pretrained(args.model_name_or_path)
     codebert.resize_token_embeddings(len(tokenizer))
-    # # 初始化混合特征提取器
-    # hybrid_model = HybridCNNBiLSTM(
-    #     roberta=codebert,
-    #     tokenizer=tokenizer,
-    #     dim_channel=100,  # 与原CNN保持一致
-    #     kernel_wins=[3,4,5],  # 与原CNN保持一致
-    #     lstm_hidden_size=150,  # LSTM隐藏层维度（双向输出为300）
-    #     dropout_rate=0.1,
-    #     num_class=len(cwe_label_map),
-    #     args=args
-    # )
 
-    # # 初始化教师模型（注意hidden_size需与混合模型的fusion_dim一致）
-    # # fusion_dim = 3*100（CNN） + 2*150（BiLSTM）= 600
-    # model = CNNTeacherModel(
-    #     shared_model=hybrid_model,
-    #     tokenizer=tokenizer,
-    #     num_labels=len(cwe_label_map),
-    #     args=args,
-    #     hidden_size=600  # 必须等于混合模型的fusion_dim
-    # )
-    # cnn_model = TextCNN(roberta=codebert,
-    #                     tokenizer=tokenizer,
-    #                     dim_channel=100,
-    #                     kernel_wins=[3,4,5],
-    #                     dropout_rate=0.1,
-    #                     num_class=len(cwe_label_map),
-    #                     args=args)
-    # model = CNNTeacherModel(shared_model=cnn_model,
-    #                         tokenizer=tokenizer,
-    #                         num_labels=len(cwe_label_map),
-    #                         args=args,
-    #                         hidden_size=300)
 
-    model=FusionModel(
+    model=DPCNN(
         encoder=codebert,
         tokenizer=tokenizer,
         args=args,
         num_class=len(cwe_label_map)
     )
-    # model = AdvancedFusionModel(
-    #     encoder=codebert,
-    #     tokenizer=tokenizer,
-    #     args=args,
-    #     num_class=len(cwe_label_map),
-    #     classifier_type="label_aware",
-    # )
-    # choices=['linear', 'mlp', 'attention', 'residual',
-    #                            'transformer', 'label_aware', 'contrastive',
-    #                            'hierarchical', 'capsule']
+
     logger.info("Training/evaluation parameters %s", args)
     # Training
     if args.do_train:
