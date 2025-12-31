@@ -1,0 +1,21 @@
+python teacher_main.py \
+    --output_dir=./saved_models \
+    --model_name=train.bin \
+    --tokenizer_name=microsoft/codebert-base \
+    --model_name_or_path=microsoft/codebert-base \
+    --train_data_file=../../data/big_vul/train.json \
+    --eval_data_file=../../data/big_vul/val.json \
+    --test_data_file=../../data/big_vul/test.json \
+    --dataset=json \
+    --do_train \
+    --do_test \
+    --block_size 512 \
+    --epochs 20 \
+    --train_batch_size 16 \
+    --eval_batch_size 16 \
+    --learning_rate 2e-4 \
+    --max_grad_norm 1.0 \
+    --evaluate_during_training \
+    --hidden_size 256 \
+    --early_stopping_patience 20 \
+    --seed 123456  2>&1 | tee train_cnn_teacher.log
