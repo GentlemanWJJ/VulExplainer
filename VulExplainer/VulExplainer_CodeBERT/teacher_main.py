@@ -18,6 +18,52 @@ import pandas as pd
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
 logger = logging.getLogger(__name__)
+cwe_abstract_mapping = {
+    "CWE-77": "Variant",
+    "CWE-20": "Base",
+    "CWE-682": "Base",
+    "CWE-78": "Variant",
+    "CWE-362": "Base",
+    "CWE-754": "Base",
+    "CWE-476": "Base",
+    "CWE-287": "Base",
+    "CWE-269": "Base",
+    "CWE-59": "Base",
+    "CWE-18": "Variant",
+    "CWE-264": "Base",
+    "CWE-416": "Base",
+    "CWE-79": "Base",
+    "CWE-617": "Base",
+    "CWE-399": "Deprecated",
+    "CWE-125": "Base",
+    "CWE-22": "Base",
+    "CWE-285": "Base",
+    "CWE-404": "Base",
+    "CWE-189": "Deprecated",
+    "CWE-369": "Variant",
+    "CWE-674": "Variant",
+    "CWE-190": "Base",
+    "CWE-415": "Base",
+    "CWE-835": "Variant",
+    "CWE-17": "Deprecated",
+    "CWE-134": "Base",
+    "CWE-19": "Deprecated",
+    "CWE-254": "Base",
+    "CWE-704": "Base",
+    "CWE-732": "Base",
+    "CWE-400": "Base",
+    "CWE-311": "Base",
+    "CWE-94": "Base",
+    "CWE-200": "Base",
+    "CWE-388": "Deprecated",
+    "CWE-772": "Variant",
+    "CWE-834": "Variant",
+    "CWE-119": "Class",
+    "CWE-787": "Base",
+    "CWE-284": "Deprecated",
+    "CWE-310": "Category",
+    "CWE-358": "Variant",
+}
 
 class InputFeatures(object):
     """A single training/test features for a example."""
@@ -40,7 +86,7 @@ class TextDataset(Dataset):
         cwe_label_map,
         group_label_map,
         file_type="train",
-        dataset="diversevul"
+        dataset="json"
     ):
         if file_type == "train":
             file_path = args.train_data_file
@@ -49,18 +95,21 @@ class TextDataset(Dataset):
         elif file_type == "test":
             file_path = args.test_data_file
         self.examples = []
-        if dataset == "bigvul":
+        if dataset == "csv":
             df = pd.read_csv(file_path)
             funcs = df["func_before"].tolist()
             labels = df["CWE ID"].tolist()
             groups = df["cwe_abstract_group"].tolist()
-        elif dataset == "diversevul":
+        elif dataset == "json":
             df = pd.read_json(file_path)
             funcs = df["func"].tolist()
             labels = df["cwe"].tolist()
+            df = pd.read_json("../../data/cwe_description.json")
+            groups = [df[cwe][2] for cwe in labels]
         for i in tqdm(range(len(funcs))):
             label = cwe_label_map[labels[i]][1]
-            group_label = 0
+            group_label_map = {"Category": 0, "Class": 1, "Variant": 2, "Base": 3, "Deprecated": 4, "Pillar": 5}
+            group_label = group_label_map[groups[i]]
             self.examples.append(
                 convert_examples_to_features(
                     funcs[i], label, group_label, tokenizer, args
@@ -148,8 +197,9 @@ def set_seed(args):
 def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
     """ Train the model """
     # build dataloader
-    train_sampler = RandomSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=0)
+    # train_sampler = RandomSampler(train_dataset)
+    # train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=0)
+    train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size, num_workers=4, shuffle=True)
     
     if args.use_logit_adjustment:
         logit_adjustment = compute_adjustment(tau=args.tau, args=args, cwe_label_map=cwe_label_map)
@@ -244,8 +294,11 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
 
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     # build dataloader
-    eval_sampler = SequentialSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
+    # eval_sampler = SequentialSampler(eval_dataset)
+    # eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
+    eval_dataloader = DataLoader(
+        eval_dataset, batch_size=args.eval_batch_size, num_workers=4
+    )
 
     # multi-gpu evaluate
     if args.n_gpu > 1 and eval_when_training is False:
@@ -284,8 +337,13 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
 
 def test(args, model, tokenizer, test_dataset):
     # build dataloader
-    test_sampler = SequentialSampler(test_dataset)
-    test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
+    # test_sampler = SequentialSampler(test_dataset)
+    # test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
+    test_dataloader = DataLoader(
+        test_dataset,
+        batch_size=args.eval_batch_size,
+        num_workers=4,
+    )
 
     # multi-gpu evaluate
     if args.n_gpu > 1:
@@ -402,6 +460,8 @@ def main():
                         help="random seed for initialization")
     parser.add_argument('--epochs', type=int, default=1,
                         help="training epochs")
+    parser.add_argument("--dataset", default="json", type=str)
+
     args = parser.parse_args()
     # Setup CUDA, GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -438,8 +498,22 @@ def main():
     logger.info("Training/evaluation parameters %s", args)
     # Training
     if args.do_train:
-        train_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='train')
-        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='eval')
+        train_dataset = TextDataset(
+            tokenizer,
+            args,
+            cwe_label_map,
+            group_label_map,
+            file_type="train",
+            dataset=args.dataset,
+        )
+        eval_dataset = TextDataset(
+            tokenizer,
+            args,
+            cwe_label_map,
+            group_label_map,
+            file_type="eval",
+            dataset=args.dataset,
+        )
         train(args, train_dataset, model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
     # Evaluation
     results = {}
@@ -448,7 +522,14 @@ def main():
         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
         model.load_state_dict(torch.load(output_dir, map_location=args.device))
         model.to(args.device)
-        test_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='test')
+        test_dataset = TextDataset(
+            tokenizer,
+            args,
+            cwe_label_map,
+            group_label_map,
+            file_type="test",
+            dataset=args.dataset,
+        )
         y_trues, y_preds = test(args, model, tokenizer, test_dataset)
     return results
 

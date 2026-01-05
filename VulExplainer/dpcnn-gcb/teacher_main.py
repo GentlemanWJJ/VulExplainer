@@ -252,8 +252,9 @@ def set_seed(args):
 def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
     """ Train the model """
     # build dataloader
-    train_sampler = RandomSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=0)
+    # train_sampler = RandomSampler(train_dataset)
+    # train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=0)
+    train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size, num_workers=4, shuffle=True)
 
     if args.use_logit_adjustment:
         logit_adjustment = compute_adjustment(tau=args.tau, args=args, cwe_label_map=cwe_label_map)
@@ -375,9 +376,9 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
 
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     # build dataloader
-    eval_sampler = SequentialSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
-
+    # eval_sampler = SequentialSampler(eval_dataset)
+    # eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
+    eval_dataloader = DataLoader(eval_dataset, batch_size=args.eval_batch_size, num_workers=4, shuffle=False)
     # multi-gpu evaluate
     if args.n_gpu > 1 and eval_when_training is False:
         model = torch.nn.DataParallel(model)
@@ -421,8 +422,9 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
 
 def test(args, model, tokenizer, test_dataset):
     # build dataloader
-    test_sampler = SequentialSampler(test_dataset)
-    test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
+    # test_sampler = SequentialSampler(test_dataset)
+    # test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
+    test_dataloader = DataLoader(test_dataset, batch_size=args.eval_batch_size, num_workers=4, shuffle=False)
 
     # multi-gpu evaluate
     if args.n_gpu > 1:

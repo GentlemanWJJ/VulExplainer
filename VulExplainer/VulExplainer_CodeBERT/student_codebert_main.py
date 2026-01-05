@@ -1,5 +1,6 @@
 from __future__ import absolute_import, division, print_function
 import argparse
+from ast import arg
 import logging
 import os
 import pickle
@@ -24,6 +25,52 @@ BEST_BETA = None
 
 cpu_cont = 16
 logger = logging.getLogger(__name__)
+cwe_abstract_mapping = {
+    "CWE-77": "Variant",
+    "CWE-20": "Base",
+    "CWE-682": "Base",
+    "CWE-78": "Variant",
+    "CWE-362": "Base",
+    "CWE-754": "Base",
+    "CWE-476": "Base",
+    "CWE-287": "Base",
+    "CWE-269": "Base",
+    "CWE-59": "Base",
+    "CWE-18": "Variant",
+    "CWE-264": "Base",
+    "CWE-416": "Base",
+    "CWE-79": "Base",
+    "CWE-617": "Base",
+    "CWE-399": "Deprecated",
+    "CWE-125": "Base",
+    "CWE-22": "Base",
+    "CWE-285": "Base",
+    "CWE-404": "Base",
+    "CWE-189": "Deprecated",
+    "CWE-369": "Variant",
+    "CWE-674": "Variant",
+    "CWE-190": "Base",
+    "CWE-415": "Base",
+    "CWE-835": "Variant",
+    "CWE-17": "Deprecated",
+    "CWE-134": "Base",
+    "CWE-19": "Deprecated",
+    "CWE-254": "Base",
+    "CWE-704": "Base",
+    "CWE-732": "Base",
+    "CWE-400": "Base",
+    "CWE-311": "Base",
+    "CWE-94": "Base",
+    "CWE-200": "Base",
+    "CWE-388": "Deprecated",
+    "CWE-772": "Variant",
+    "CWE-834": "Variant",
+    "CWE-119": "Class",
+    "CWE-787": "Base",
+    "CWE-284": "Deprecated",
+    "CWE-310": "Category",
+    "CWE-358": "Variant",
+}
 
 class InputFeatures(object):
     """A single training/test features for a example."""
@@ -46,7 +93,7 @@ class TextDataset(Dataset):
         cwe_label_map,
         group_label_map,
         file_type="train",
-        dataset="diversevul",
+        dataset="json",
     ):
         if file_type == "train":
             file_path = args.train_data_file
@@ -55,18 +102,27 @@ class TextDataset(Dataset):
         elif file_type == "test":
             file_path = args.test_data_file
         self.examples = []
-        if dataset == "bigvul":
+        if dataset == "csv":
             df = pd.read_csv(file_path)
             funcs = df["func_before"].tolist()
             labels = df["CWE ID"].tolist()
             groups = df["cwe_abstract_group"].tolist()
-        elif dataset == "diversevul":
+        elif dataset == "json":
             df = pd.read_json(file_path)
             funcs = df["func"].tolist()
             labels = df["cwe"].tolist()
+            groups = [cwe_abstract_mapping[cwe] for cwe in labels]
         for i in tqdm(range(len(funcs))):
             label = cwe_label_map[labels[i]][1]
-            group_label = 0
+            group_label_map = {
+                "Category": 0,
+                "Class": 1,
+                "Variant": 2,
+                "Base": 3,
+                "Deprecated": 4,
+                "Pillar": 5,
+            }
+            group_label = group_label_map[groups[i]]
             self.examples.append(
                 convert_examples_to_features(
                     funcs[i], label, group_label, tokenizer, args
@@ -117,7 +173,7 @@ class TextDataset(Dataset):
 #     def __len__(self):
 #         return len(self.examples)
 
-#     def __getitem__(self, i):       
+#     def __getitem__(self, i):
 #         return torch.tensor(self.examples[i].input_ids), torch.tensor(self.examples[i].label).float(), torch.tensor(self.examples[i].group)
 
 def convert_examples_to_features(func, label, group, tokenizer, args):
@@ -432,7 +488,8 @@ def main():
                         help="random seed for initialization")
     parser.add_argument('--epochs', type=int, default=1,
                         help="training epochs")
-    
+    parser.add_argument("--dataset", default="json", type=str)
+
     args = parser.parse_args()
     # Setup CUDA, GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -448,7 +505,7 @@ def main():
     logger.warning("device: %s, n_gpu: %s",device, args.n_gpu,)
     # Set seed
     set_seed(args)
-    
+
     tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_name)
     tokenizer.add_tokens(["<dis>"])
     tokenizer.dis_token_id = tokenizer.encode("<dis>", add_special_tokens=False)[0]
@@ -468,19 +525,19 @@ def main():
                             num_labels=len(cwe_label_map),
                             args=args,
                             hidden_size=300)    
-    
-    teacher_model.load_state_dict(torch.load("./saved_models/checkpoint-best-acc/cnnteacher.bin", map_location=args.device), strict=False)
+
+    teacher_model.load_state_dict(torch.load("./saved_models/checkpoint-best-acc/train.bin", map_location=args.device), strict=False)
     teacher_model.to(args.device)
-    
+
     model = RobertaModel.from_pretrained(args.model_name_or_path)
     model.resize_token_embeddings(len(tokenizer))
     model = StudentBERT(encoder=model, tokenizer=tokenizer, config=model.config, num_labels=len(cwe_label_map), args=args)
     logger.info("Training/evaluation parameters %s", args)
-    
+
     # Training
     if args.do_train:
-        train_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='train',dataset='diversevul')
-        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='eval',dataset='diversevul')
+        train_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='train',dataset=args.dataset)
+        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='eval',dataset=args.dataset)
         train(args, train_dataset, model, teacher_model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
     # Evaluation
     if args.do_test:
@@ -488,7 +545,7 @@ def main():
         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
         model.load_state_dict(torch.load(output_dir, map_location=args.device),strict=False)
         model.to(args.device)
-        test_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='test',dataset='diversevul')
+        test_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='test',dataset=args.dataset)
         y_trues, y_preds = test(args, model, tokenizer, test_dataset, beta=args.beta)
 
 if __name__ == "__main__":

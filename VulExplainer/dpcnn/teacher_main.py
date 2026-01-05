@@ -12,7 +12,7 @@ from transformers import ( get_linear_schedule_with_warmup, RobertaTokenizer, Ro
 from torch.optim import AdamW
 
 from tqdm import tqdm
-from DPCNN import DPCNN
+from DPCNN import DPCNN,TextCNN
 
 import pandas as pd
 # metrics
@@ -51,9 +51,26 @@ class TextDataset(Dataset):
             df = pd.read_json(file_path)
             funcs = df["func"].tolist()
             labels = df["cwe"].tolist()
+            df = pd.read_json("../../data/cwe_description.json")
+            groups = [df[cwe][2] for cwe in labels]
+
         for i in tqdm(range(len(funcs))):
             label = cwe_label_map[labels[i]][1]
-            group_label = 0
+            group_label_map = {
+                "Category": 0,
+                "Class": 1,
+                "Variant": 2,
+                "Base": 3,
+                "Deprecated": 4,
+                "Pillar": 5,
+                "category": 0,
+                "class": 1,
+                "variant": 2,
+                "base": 3,
+                "deprecated": 4,
+                "pillar": 5,
+            }
+            group_label = group_label_map[groups[i]]
             self.examples.append(convert_examples_to_features(funcs[i], label, group_label, tokenizer, args))
         if file_type == "train":
             self.cwe_label_map = cwe_label_map
@@ -97,8 +114,9 @@ def set_seed(args):
 def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
     """ Train the model """
     # build dataloader
-    train_sampler = RandomSampler(train_dataset)
-    train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=0)
+    # train_sampler = RandomSampler(train_dataset)
+    # train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=0)
+    train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size, num_workers=4, shuffle=True)
 
     if args.use_logit_adjustment:
         logit_adjustment = compute_adjustment(tau=args.tau, args=args, cwe_label_map=cwe_label_map)
@@ -158,7 +176,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
         for step, batch in enumerate(bar):
             (input_ids, labels, groups) = [x.to(args.device) for x in batch]            
             model.train()
-            loss = model(input_ids=input_ids,labels=labels)
+            loss = model(input_ids=input_ids,labels=labels, groups=groups)
             if args.n_gpu > 1:
                 loss = loss.mean()
             if args.gradient_accumulation_steps > 1:
@@ -213,8 +231,11 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
 
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     # build dataloader
-    eval_sampler = SequentialSampler(eval_dataset)
-    eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
+    # eval_sampler = SequentialSampler(eval_dataset)
+    # eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
+    eval_dataloader = DataLoader(
+        eval_dataset, batch_size=args.eval_batch_size, num_workers=4, shuffle=False
+    )
 
     # multi-gpu evaluate
     if args.n_gpu > 1 and eval_when_training is False:
@@ -230,7 +251,7 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     for batch in eval_dataloader:
         (input_ids, labels, groups) = [x.to(args.device) for x in batch]            
         with torch.no_grad():
-            prob = model(input_ids=input_ids,labels=None)
+            prob = model(input_ids=input_ids,labels=None,groups=None)
             y_preds += list((np.argmax(prob.cpu().numpy(), axis=1)))
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))    
     # calculate scores
@@ -253,8 +274,11 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
 
 def test(args, model, tokenizer, test_dataset):
     # build dataloader
-    test_sampler = SequentialSampler(test_dataset)
-    test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
+    # test_sampler = SequentialSampler(test_dataset)
+    # test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
+    test_dataloader = DataLoader(
+        test_dataset, batch_size=args.eval_batch_size, num_workers=4, shuffle=False
+    )
 
     # multi-gpu evaluate
     if args.n_gpu > 1:
@@ -264,14 +288,14 @@ def test(args, model, tokenizer, test_dataset):
     logger.info("***** Running Test *****")
     logger.info("  Num examples = %d", len(test_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
-    
+
     model.eval()
     y_preds=[]  
     y_trues=[]
     for batch in test_dataloader:
         (input_ids, labels, groups) = [x.to(args.device) for x in batch]            
         with torch.no_grad():
-            prob = model(input_ids=input_ids,labels=None)
+            prob = model(input_ids=input_ids, labels=None, groups=None)
             y_preds += list((np.argmax(prob.cpu().numpy(), axis=1)))
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))
     # calculate scores
@@ -286,11 +310,9 @@ def test(args, model, tokenizer, test_dataset):
         "test_f1": float(f1),
     }
 
-
     logger.info("***** Test results *****")
     for key in sorted(result.keys()):
         logger.info("  %s = %s", key, str(round(result[key],4)))
-
 
     return y_trues, y_preds
 
@@ -326,7 +348,6 @@ def main():
                         help="Whether to use non-pretrained model.")
     parser.add_argument("--tokenizer_name", default="", type=str,
                         help="Optional pretrained tokenizer name or path if not the same as model_name_or_path")
-    parser.add_argument("--dataset", default="diversevul", type=str)
     parser.add_argument("--do_train", action='store_true',
                         help="Whether to run training.")
     parser.add_argument("--do_eval", action='store_true',
@@ -377,6 +398,7 @@ def main():
     parser.add_argument(
         "--early_stopping_patience", default=3, type=int, help="Number of evaluations after which training will stop if no improvement."
     )
+    parser.add_argument("--dataset", default="json", type=str)
 
     args = parser.parse_args()
     # Setup CUDA, GPU
@@ -399,6 +421,8 @@ def main():
     codebert = RobertaModel.from_pretrained(args.model_name_or_path)
     codebert.resize_token_embeddings(len(tokenizer))
 
+    groups_model = TextCNN(
+        encoder=codebert, tokenizer=tokenizer, args=args, num_class=5)
 
     model=DPCNN(
         encoder=codebert,
@@ -419,6 +443,7 @@ def main():
             file_type="eval",
             dataset=args.dataset
         )
+        # train(args, train_dataset, groups_model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
         train(args, train_dataset, model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
     # Evaluation
     results = {}
