@@ -526,7 +526,7 @@ def main():
                             args=args,
                             hidden_size=300)    
 
-    teacher_model.load_state_dict(torch.load("./saved_models/checkpoint-best-acc/train.bin", map_location=args.device), strict=False)
+    teacher_model.load_state_dict(torch.load("./saved_models/checkpoint-best-acc/diversevul.bin", map_location=args.device), strict=False)
     teacher_model.to(args.device)
 
     model = RobertaModel.from_pretrained(args.model_name_or_path)

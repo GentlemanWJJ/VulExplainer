@@ -1,11 +1,11 @@
 python teacher_main.py \
     --output_dir=./saved_models \
-    --model_name=diversevul.bin \
+    --model_name=megavul.bin \
     --tokenizer_name=microsoft/codebert-base \
     --model_name_or_path=microsoft/codebert-base \
-    --train_data_file=../../data/diversevul/train.json \
-    --eval_data_file=../../data/diversevul/val.json \
-    --test_data_file=../../data/diversevul/test.json \
+    --train_data_file=../../data/megavul/train.json \
+    --eval_data_file=../../data/megavul/val.json \
+    --test_data_file=../../data/megavul/test.json \
     --dataset=json \
     --do_train \
     --block_size 512 \

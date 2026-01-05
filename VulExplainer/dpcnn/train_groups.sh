@@ -1,6 +1,6 @@
-python teacher_main.py \
+python groups_main.py \
     --output_dir=./saved_models \
-    --model_name=train.bin \
+    --model_name=train_groups.bin \
     --tokenizer_name=microsoft/codebert-base \
     --model_name_or_path=microsoft/codebert-base \
     --train_data_file=../../data/bigvul/train.json \
@@ -18,4 +18,4 @@ python teacher_main.py \
     --evaluate_during_training \
     --hidden_size 256 \
     --early_stopping_patience 20 \
-    --seed 123456  2>&1 | tee train_cnn_teacher.log
+    --seed 123456  2>&1 | tee train_groups.log

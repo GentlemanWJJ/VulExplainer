@@ -13,7 +13,7 @@ from torch.optim import AdamW
 
 from tqdm import tqdm
 from DPCNN import DPCNN,TextCNN
-
+from groups_model import GroupModel
 import pandas as pd
 # metrics
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
@@ -56,20 +56,6 @@ class TextDataset(Dataset):
 
         for i in tqdm(range(len(funcs))):
             label = cwe_label_map[labels[i]][1]
-            group_label_map = {
-                "Category": 0,
-                "Class": 1,
-                "Variant": 2,
-                "Base": 3,
-                "Deprecated": 4,
-                "Pillar": 5,
-                "category": 0,
-                "class": 1,
-                "variant": 2,
-                "base": 3,
-                "deprecated": 4,
-                "pillar": 5,
-            }
             group_label = group_label_map[groups[i]]
             self.examples.append(convert_examples_to_features(funcs[i], label, group_label, tokenizer, args))
         if file_type == "train":
@@ -111,17 +97,12 @@ def set_seed(args):
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
 
-def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
+def train(args, train_dataset, model,groups_model ,tokenizer, eval_dataset):
     """ Train the model """
     # build dataloader
     # train_sampler = RandomSampler(train_dataset)
     # train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=0)
     train_dataloader = DataLoader(train_dataset, batch_size=args.train_batch_size, num_workers=4, shuffle=True)
-
-    if args.use_logit_adjustment:
-        logit_adjustment = compute_adjustment(tau=args.tau, args=args, cwe_label_map=cwe_label_map)
-    else:
-        logit_adjustment = None
 
     args.max_steps = args.epochs * len(train_dataloader)
     # evaluate the model per epoch
@@ -177,6 +158,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
             (input_ids, labels, groups) = [x.to(args.device) for x in batch]            
             model.train()
             loss = model(input_ids=input_ids,labels=labels, groups=groups)
+            
             if args.n_gpu > 1:
                 loss = loss.mean()
             if args.gradient_accumulation_steps > 1:
@@ -201,7 +183,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                 avg_loss=round(np.exp((tr_loss - logging_loss) /(global_step- tr_nb)),4)
 
                 if global_step % args.save_steps == 0:
-                    results = evaluate(args, model, tokenizer, eval_dataset, eval_when_training=True)    
+                    results = evaluate(args, model,groups_model, tokenizer, eval_dataset, eval_when_training=True)    
 
                     # Early stopping logic
                     cur_acc = results.get(early_stopping_metric, 0)
@@ -229,7 +211,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                             break
 
 
-def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
+def evaluate(args, model,groups_model, tokenizer, eval_dataset, eval_when_training=False):
     # build dataloader
     # eval_sampler = SequentialSampler(eval_dataset)
     # eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
@@ -251,7 +233,15 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     for batch in eval_dataloader:
         (input_ids, labels, groups) = [x.to(args.device) for x in batch]            
         with torch.no_grad():
-            prob = model(input_ids=input_ids,labels=None,groups=None)
+            probs = groups_model(input_ids=input_ids, groups=None, labels=None)
+            pred_groups=torch.nn.functional.one_hot(
+                torch.argmax(probs, dim=1), num_classes=probs.shape[-1]
+            ).float().to(args.device)
+
+            # teacher_preds_one_hot = (
+            #     torch.tensor(teacher_preds_one_hot).float().to(args.device)
+            # )
+            prob = model(input_ids=input_ids, labels=None, groups=pred_groups)
             y_preds += list((np.argmax(prob.cpu().numpy(), axis=1)))
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))    
     # calculate scores
@@ -408,22 +398,27 @@ def main():
 
     with open("../../data/big_vul/cwe_label_map.pkl", "rb") as f:
         cwe_label_map = pickle.load(f)
-    group_label_map = {"category": 0, "class": 1, "variant": 2, "base": 3, "deprecated": 4, "pillar": 5}
+    group_label_map = {
+        "category": [1, 0, 0, 0, 0, 0],
+        "class": [0, 1, 0, 0, 0, 0],
+        "variant": [0, 0, 1, 0, 0, 0],
+        "base": [0, 0, 0, 1, 0, 0],
+        "deprecated": [0, 0, 0, 0, 1, 0],
+        "pillar": [0, 0, 0, 0, 0, 1],
+    }
     # Setup logging
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',datefmt='%m/%d/%Y %H:%M:%S',level=logging.INFO)
     logger.warning("device: %s, n_gpu: %s",device, args.n_gpu,)
     # Set seed
     set_seed(args)
     tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_name)
-    tokenizer.add_tokens(["<dis>"])
-    tokenizer.dis_token_id = tokenizer.encode("<dis>", add_special_tokens=False)[0]
-    tokenizer.dis_token = "<dis>"
     codebert = RobertaModel.from_pretrained(args.model_name_or_path)
-    codebert.resize_token_embeddings(len(tokenizer))
 
-    groups_model = TextCNN(
-        encoder=codebert, tokenizer=tokenizer, args=args, num_class=5)
-
+    groups_model = GroupModel(
+        encoder=codebert, tokenizer=tokenizer, args=args, num_class=len(group_label_map)
+    )
+    groups_model.load_state_dict(torch.load("./saved_models/checkpoint-best-acc/train_groups.bin", map_location=args.device), strict=False)
+    groups_model.to(args.device)
     model=DPCNN(
         encoder=codebert,
         tokenizer=tokenizer,
@@ -443,8 +438,7 @@ def main():
             file_type="eval",
             dataset=args.dataset
         )
-        # train(args, train_dataset, groups_model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
-        train(args, train_dataset, model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
+        train(args, train_dataset, model,groups_model, tokenizer, eval_dataset)
     # Evaluation
     results = {}
     if args.do_test:
