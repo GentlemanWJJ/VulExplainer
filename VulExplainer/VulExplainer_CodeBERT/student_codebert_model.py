@@ -55,7 +55,7 @@ class StudentBERT(nn.Module):
         locs = (input_ids == DISTIL_TOKEN_ID).nonzero(as_tuple=True)
         locs = locs[1].tolist()
 
-        last_hidden_state = self.encoder(input_ids, attention_mask=input_ids.ne(self.tokenizer.pad_token_id)).last_hidden_state
+        last_hidden_state = self.encoder(input_ids, attention_mask=input_ids.ne(self.tokenizer.pad_token_id)).last_hidden_state # type: ignore
         logits_cls, logits_dis = self.classifier(last_hidden_state, dis_locations=locs, args=self.args)
 
         prob_cls = torch.softmax(logits_cls, dim=-1)

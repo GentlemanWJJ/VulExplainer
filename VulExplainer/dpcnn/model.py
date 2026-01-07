@@ -13,10 +13,9 @@ class DPCNN(nn.Module):
         self.tokenizer = tokenizer
         self.args = args
         self.emb_dim = encoder.config.hidden_size
-        self.num_blocks=3
         self.dim_channel=256
-        self.epsilon = 1e-3  # FGSM扰动系数
-        self.tau = getattr(args, "contrastive_tau", 0.5)  # 对比学习温度系数τ
+        self.epsilon = 1e-4  # FGSM扰动系数
+        self.tau = getattr(args, "contrastive_tau", 0.1)  # 对比学习温度系数τ
 
         self.conv_region = nn.Conv2d(1, self.dim_channel, (3, self.emb_dim), stride=1)
         self.conv = nn.Conv2d(self.dim_channel, self.dim_channel, (3, 1), stride=1)
@@ -29,11 +28,6 @@ class DPCNN(nn.Module):
         self.bn_1 = nn.BatchNorm2d(num_features=self.dim_channel)
         self.bn_2 = nn.BatchNorm2d(num_features=self.dim_channel)
 
-        self.category_head = nn.Linear(self.dim_channel, num_class)
-        self.class_head = nn.Linear(self.dim_channel, num_class)
-        self.variant_head = nn.Linear(self.dim_channel, num_class)
-        self.base_head = nn.Linear(self.dim_channel, num_class)
-        self.deprecated_head = nn.Linear(self.dim_channel, num_class)
 
     def _forward(self, x):
         x = x.unsqueeze(1)  # [batch_size, 250, seq_len, 1]
@@ -48,12 +42,12 @@ class DPCNN(nn.Module):
         x = self.relu(x)
         x = self.conv(x)  # [batch_size, 250, seq_len-3+1, 1]
         while x.size()[2] > 2:
-            x = self._block(x)
+            x = self.block(x)
         x = x.squeeze()  # [batch_size, num_filters(250)]
         x = self.dropout(x)
         return x
 
-    def _block(self, x):
+    def block(self, x):
         x = self.padding2(x)
         px = self.max_pool(x)
 
@@ -69,7 +63,7 @@ class DPCNN(nn.Module):
         x = x + px
         return x
 
-    def _contrastive_loss(self, clean_feat, adv_feat):
+    def contrastive_loss(self, clean_feat, adv_feat):
         """
         InfoNCE 对比损失：
         - 正样本对: (clean_feat_i, adv_feat_i)
@@ -105,7 +99,7 @@ class DPCNN(nn.Module):
         loss_ctr = F.cross_entropy(sim_matrix, pos_indices)
         return loss_ctr
 
-    def forward(self, input_ids,groups, labels, fgsm_attack=False, lambda_fgsm=0.1):
+    def forward(self, input_ids,groups, labels, fgsm_attack=True, lambda_fgsm=0.1):
         """
         支持基于 FGSM 的对抗 + 对比学习训练。
         - 生成干净样本与对抗样本的表示
@@ -115,6 +109,8 @@ class DPCNN(nn.Module):
             L = (1-λ)/2 * (L_CE^v + L_CE^{v+r}) + λ * L_ctr
           其中 λ 由参数 lambda_fgsm 控制，epsilon 为 FGSM 扰动步长。
         """
+
+
         # 获取原始embedding
         # embeddings = self.encoder.embeddings(input_ids).detach()
         # embeddings.requires_grad_(True)
@@ -131,117 +127,38 @@ class DPCNN(nn.Module):
             .expand(input_ids.shape[0], input_ids.shape[1], 768)
         )
         embeddings = emb_x * attention_mask
-
-        # 正常前向（干净样本）
         features = self._forward(embeddings)
         logits = self.fc(features)
 
-        category_logits = self.category_head(features)
-        class_logits = self.class_head(features)
-        variant_logits = self.variant_head(features)
-        base_logits = self.base_head(features)
-        deprecated_logits = self.deprecated_head(features)
-        logits = (
-            torch.empty(category_logits.shape[0], category_logits.shape[1])
-            .float()
-            .to(self.args.device)
-        )
-
-        for i in range(len(groups)):
-            idx=torch.argmax(groups[i], dim=-1)
-            if idx.item() == 0:
-                logits[i, :] = category_logits[i]
-            elif idx.item() == 1:
-                logits[i, :] = class_logits[i]
-            elif idx.item() == 2:
-                logits[i, :] = variant_logits[i]
-            elif idx.item() == 3:
-                logits[i, :] = base_logits[i]
-            elif idx.item() == 4:
-                logits[i, :] = deprecated_logits[i]
-            elif idx.item() == 5:
-                logits[i, :] = deprecated_logits[i]
         if labels is None or not fgsm_attack:
             if labels is None:
                 return F.softmax(logits, dim=-1)
-            # 仅使用干净样本的交叉熵损失
             loss_fct = nn.CrossEntropyLoss()
             loss = loss_fct(logits, labels)
-            # groups_loss = loss_fct(groups_logits, groups_one_hot)
             return loss
 
-        # # 训练阶段 + 启用 FGSM 对抗与对比学习
-        # loss_fct = nn.CrossEntropyLoss()
-        # loss_clean = loss_fct(logits, labels)
+        # 训练阶段 + 启用 FGSM 对抗与对比学习
+        loss_fct = nn.CrossEntropyLoss()
+        loss_clean = loss_fct(logits, labels)
 
-        # # 反向传播获取 embedding 梯度
-        # grads = torch.autograd.grad(
-        #     loss_clean, embeddings, retain_graph=True, create_graph=False
-        # )[0]
+        # 反向传播获取 embedding 梯度
+        grads = torch.autograd.grad(
+            loss_clean, embeddings, retain_graph=True, create_graph=False
+        )[0]
 
-        # # FGSM 扰动：按 L2 归一化梯度
-        # grads_norm = torch.norm(grads, p=2, dim=-1, keepdim=True) + 1e-8
-        # adv_embeddings = embeddings + self.epsilon * grads / grads_norm
+        # FGSM 扰动：按 L2 归一化梯度
+        grads_norm = torch.norm(grads, p=2, dim=-1, keepdim=True) + 1e-8
+        adv_embeddings = embeddings + self.epsilon * grads / grads_norm
 
-        # # 对抗样本前向
-        # adv_features = self._feature_forward(adv_embeddings)
-        # adv_logits = self.fc(adv_features)
-        # loss_adv = loss_fct(adv_logits, labels)
+        # 对抗样本前向
+        adv_features = self._forward(adv_embeddings)
+        adv_logits = self.fc(adv_features)
+        loss_adv = loss_fct(adv_logits, labels)
 
-        # # InfoNCE 对比损失（干净特征 vs 对抗特征）
-        # loss_ctr = self._contrastive_loss(features, adv_features)
+        # InfoNCE 对比损失（干净特征 vs 对抗特征）
+        loss_ctr = self.contrastive_loss(features, adv_features)
 
-        # # 总损失：图片中的公式
-        # total_loss = (1 - lambda_fgsm) * 0.5 * (loss_clean + loss_adv) + lambda_fgsm * loss_ctr
-        # return total_loss
+        # 总损失：图片中的公式
+        total_loss = (1 - lambda_fgsm) * 0.5 * (loss_clean + loss_adv) + lambda_fgsm * loss_ctr
+        return total_loss
 
-
-class TextCNN(nn.Module):
-
-    def __init__(
-        self,
-        encoder,
-        tokenizer,
-        num_class,
-        args,
-    ):
-        super(TextCNN, self).__init__()
-        self.encoder = encoder
-        self.tokenizer = tokenizer
-        self.args = args
-        emb_dim = encoder.config.hidden_size
-        dim_channel=100
-        kernel_wins = [3, 4, 5]
-        # Convolutional Layers with different window size kernels
-        self.convs = nn.ModuleList(
-            [nn.Conv2d(1, dim_channel, (w, emb_dim)) for w in kernel_wins]
-        )
-        # Dropout layer
-        self.dropout = nn.Dropout(0.1)
-        # FC layer
-        self.fc = nn.Linear(len(kernel_wins) * dim_channel, num_class)
-
-    def forward(self, input_ids, labels=None, return_hidden_state=False):
-        emb_x = self.encoder.embeddings(input_ids)
-        attention_mask = (
-            input_ids.ne(self.tokenizer.pad_token_id)
-            .unsqueeze(-1)
-            .expand(input_ids.shape[0], input_ids.shape[1], 768)
-        )
-        emb_x = emb_x * attention_mask
-        emb_x = emb_x.unsqueeze(1)
-        con_x = [conv(emb_x) for conv in self.convs]
-        pool_x = [F.max_pool1d(x.squeeze(-1), x.size()[2]) for x in con_x]
-        fc_x = torch.cat(pool_x, dim=1)
-        fc_x = fc_x.squeeze(-1)
-        fc_x = self.dropout(fc_x)
-        logit = self.fc(fc_x)
-        if labels is not None:
-            loss_fct = nn.CrossEntropyLoss()
-            loss = loss_fct(logit, labels)
-            return loss
-        prob = torch.softmax(logit, dim=-1)
-        if return_hidden_state:
-            return fc_x
-        else:
-            return prob

@@ -4,11 +4,10 @@ python student_codebert_main.py \
     --model_name=soft_distil_model.bin \
     --tokenizer_name=microsoft/codebert-base \
     --model_name_or_path=microsoft/codebert-base \
-    --train_data_file=../../data/bigvul/train.json \
-    --eval_data_file=../../data/bigvul/val.json \
-    --test_data_file=../../data/bigvul/test.json \
+    --train_data_file=../../data/diversevul/train.json \
+    --eval_data_file=../../data/diversevul/val.json \
+    --test_data_file=../../data/diversevul/test.json \
     --dataset=json \
-    --do_train \
     --do_test \
     --block_size 512 \
     --epochs 20 \
