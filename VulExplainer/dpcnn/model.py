@@ -30,20 +30,20 @@ class DPCNN(nn.Module):
 
 
     def _forward(self, x):
-        x = x.unsqueeze(1)  # [batch_size, 250, seq_len, 1]
-        x = self.conv_region(x)  # [batch_size, 250, seq_len-3+1, 1]
+        x = x.unsqueeze(1) 
+        x = self.conv_region(x) 
 
-        x = self.padding1(x)  # [batch_size, 250, seq_len, 1]
+        x = self.padding1(x)  # [batch_size, dim_channel, seq_len, 1]
         x = self.bn_1(x)
         x = self.relu(x)
-        x = self.conv(x)  # [batch_size, 250, seq_len-3+1, 1]
-        x = self.padding1(x)  # [batch_size, 250, seq_len, 1]
+        x = self.conv(x)  # [batch_size, dim_channel, seq_len-3+1, 1]
+        x = self.padding1(x)  # [batch_size, dim_channel, seq_len, 1]
         x = self.bn_2(x)
         x = self.relu(x)
-        x = self.conv(x)  # [batch_size, 250, seq_len-3+1, 1]
+        x = self.conv(x)  # [batch_size, dim_channel, seq_len-3+1, 1]
         while x.size()[2] > 2:
             x = self.block(x)
-        x = x.squeeze()  # [batch_size, num_filters(250)]
+        x = x.squeeze()  # [batch_size, dim_channel]
         x = self.dropout(x)
         return x
 
@@ -63,7 +63,7 @@ class DPCNN(nn.Module):
         x = x + px
         return x
 
-    def contrastive_loss(self, clean_feat, adv_feat):
+    def InfoNCE(self, clean_feat, adv_feat):
         """
         InfoNCE 对比损失：
         - 正样本对: (clean_feat_i, adv_feat_i)
@@ -156,7 +156,7 @@ class DPCNN(nn.Module):
         loss_adv = loss_fct(adv_logits, labels)
 
         # InfoNCE 对比损失（干净特征 vs 对抗特征）
-        loss_ctr = self.contrastive_loss(features, adv_features)
+        loss_ctr = self.InfoNCE(features, adv_features)
 
         # 总损失：图片中的公式
         total_loss = (1 - lambda_fgsm) * 0.5 * (loss_clean + loss_adv) + lambda_fgsm * loss_ctr

@@ -12,7 +12,7 @@ from transformers import ( get_linear_schedule_with_warmup, RobertaTokenizer, Ro
 from torch.optim import AdamW
 
 from tqdm import tqdm
-from DPCNN import DPCNN
+from model import Model
 
 import pandas as pd
 # metrics
@@ -573,7 +573,7 @@ def main():
     codebert.resize_token_embeddings(len(tokenizer))
 
 
-    model=DPCNN(
+    model=Model(
         encoder=codebert,
         tokenizer=tokenizer,
         args=args,
