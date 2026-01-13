@@ -3,9 +3,9 @@ python main.py \
     --model_name=train.bin \
     --tokenizer_name=microsoft/codebert-base \
     --model_name_or_path=microsoft/codebert-base \
-    --train_data_file=../../data/megavul/train.json \
-    --eval_data_file=../../data/megavul/val.json \
-    --test_data_file=../../data/megavul/test.json \
+    --train_data_file=../../data/bigvul/train.json \
+    --eval_data_file=../../data/bigvul/val.json \
+    --test_data_file=../../data/bigvul/test.json \
     --dataset=json \
     --do_train \
     --do_test \
