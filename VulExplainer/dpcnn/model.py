@@ -63,7 +63,7 @@ class DPCNN(nn.Module):
         x = x + px
         return x
 
-    def InfoNCE(self, clean_feat, adv_feat):
+    def InfoNCE(self, clean_feat, adv_feat, group_ids=None):
         """
         InfoNCE 对比损失：
         - 正样本对: (clean_feat_i, adv_feat_i)
@@ -86,18 +86,51 @@ class DPCNN(nn.Module):
         sim_matrix = torch.matmul(reps, reps.t()) / self.tau
 
         # 自身相似度不参与 softmax
-        mask = torch.eye(2 * batch_size, dtype=torch.bool, device=reps.device)
-        sim_matrix = sim_matrix.masked_fill(mask, float("-inf"))
+        self_mask = torch.eye(2 * batch_size, dtype=torch.bool, device=reps.device)
+        sim_matrix = sim_matrix.masked_fill(self_mask, float("-inf"))
+        # ---------- 情况一：无 group_ids，退化为原始 InfoNCE ----------
+        if group_ids is None:
+            # 每一行的正样本索引：
+            # 前 B 行的正样本是对应的 adv（索引 +B）
+            # 后 B 行的正样本是对应的 clean（索引 -B）
+            pos_indices = torch.arange(2 * batch_size, device=reps.device)
+            pos_indices[:batch_size] += batch_size
+            pos_indices[batch_size:] -= batch_size
+            loss_ctr = F.cross_entropy(sim_matrix, pos_indices)
+            return loss_ctr
 
-        # 每一行的正样本索引：
-        # 前 B 行的正样本是对应的 adv（索引 +B）
-        # 后 B 行的正样本是对应的 clean（索引 -B）
-        pos_indices = torch.arange(2 * batch_size, device=reps.device)
-        pos_indices[:batch_size] += batch_size
-        pos_indices[batch_size:] -= batch_size
+        # ---------- 情况二：使用粗标签的 Supervised Contrastive ----------
+        # group_ids: [batch_size] 或 one-hot [batch_size, num_groups]
+        if group_ids.dim() > 1:
+            group_ids = group_ids.argmax(-1)
 
-        loss_ctr = F.cross_entropy(sim_matrix, pos_indices)
+        group_ids = group_ids.view(-1, 1)  # [B, 1]
+        labels = torch.cat([group_ids, group_ids], dim=0)  # [2B, 1]
+
+        # 构造正样本掩码：同一粗类别且非自身
+        label_mask = torch.eq(labels, labels.T).to(sim_matrix.device)  # [2B, 2B]
+        positives_mask = label_mask & (~self_mask)
+
+        # 为了数值稳定，减去每行的最大值
+        logits = sim_matrix
+        logits_max, _ = torch.max(logits, dim=1, keepdim=True)
+        logits = logits - logits_max.detach()
+
+        # 计算分母：对所有非自身样本求 exp 并求和
+        exp_logits = torch.exp(logits) * (~self_mask).float()
+        log_prob = logits - torch.log(exp_logits.sum(dim=1, keepdim=True) + 1e-8)
+
+        # 只在正样本位置求平均 log_prob
+        positives_count = positives_mask.sum(dim=1)
+        # 避免除 0：没有正样本的 anchor 其损失视为 0
+        positives_count = positives_count.clamp(min=1)
+        mean_log_prob_pos = (positives_mask.float() * log_prob).sum(
+            dim=1
+        ) / positives_count
+
+        loss_ctr = -mean_log_prob_pos.mean()
         return loss_ctr
+
 
     def forward(self, input_ids,groups, labels, fgsm_attack=True, lambda_fgsm=0.1):
         """
@@ -157,7 +190,7 @@ class DPCNN(nn.Module):
         groups_loss_adv = loss_fct(adv_groups_logits, groups.argmax(-1))
         loss_adv = self.alpha * loss_adv + (1 - self.alpha) * groups_loss_adv
         # InfoNCE 对比损失（干净特征 vs 对抗特征）
-        loss_ctr = self.InfoNCE(features, adv_features)
+        loss_ctr = self.InfoNCE(features, adv_features, group_ids=groups)
 
         # 总损失：图片中的公式
         loss = (1 - lambda_fgsm) * 0.5 * (loss + loss_adv) + lambda_fgsm * loss_ctr
