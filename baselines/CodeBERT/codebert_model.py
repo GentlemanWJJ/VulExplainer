@@ -32,8 +32,8 @@ class Model(RobertaForSequenceClassification):
 
     def forward(self, input_ids, labels=None, logit_adjustment=None, focal_loss=False):
         outputs = self.encoder(input_ids, attention_mask=input_ids.ne(self.tokenizer.pad_token_id)).last_hidden_state
-        # logits = self.classifier(outputs)
-        logits = self.fc(outputs[:, 0, :])
+        logits = self.classifier(outputs)
+        # logits = self.fc(outputs[:, 0, :])
         prob = torch.softmax(logits, dim=-1)
         if labels is not None:
             if logit_adjustment is not None:

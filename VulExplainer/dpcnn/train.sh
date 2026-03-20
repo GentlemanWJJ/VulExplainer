@@ -1,19 +1,19 @@
 python main.py \
     --output_dir=./saved_models \
-    --model_name=train.bin \
+    --model_name=model.bin \
     --tokenizer_name=microsoft/codebert-base \
     --model_name_or_path=microsoft/codebert-base \
     --train_data_file=../../data/bigvul/train.json \
     --eval_data_file=../../data/bigvul/val.json \
     --test_data_file=../../data/bigvul/test.json \
     --dataset=json \
-    --do_train \
+    --data_type=vul \
     --do_test \
     --block_size 512 \
-    --epochs 30 \
+    --epochs 20 \
     --train_batch_size 128 \
     --eval_batch_size 128 \
-    --learning_rate 5e-3 \
+    --learning_rate 2e-3 \
     --max_grad_norm 1.0 \
     --evaluate_during_training \
     --hidden_size 256 \

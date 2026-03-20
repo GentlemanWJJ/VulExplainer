@@ -3,16 +3,15 @@ python graphcodebert_main.py \
     --model_name=model.bin \
     --tokenizer_name=microsoft/graphcodebert-base \
     --model_name_or_path=microsoft/graphcodebert-base \
-    --train_data_file=../../data/big_vul/train.json \
-    --eval_data_file=../../data/big_vul/val.json \
-    --test_data_file=../../data/big_vul/test.json \
-    --do_train \
+    --train_data_file=../../data/megavul/train.json \
+    --eval_data_file=../../data/megavul/val.json \
+    --test_data_file=../../data/megavul/test.json \
     --do_test \
     --block_size 512 \
-    --epochs 50 \
-    --train_batch_size 16 \
-    --eval_batch_size 16 \
-    --learning_rate 5e-5 \
+    --epochs 20 \
+    --train_batch_size 32 \
+    --eval_batch_size 32 \
+    --learning_rate 1e-4 \
     --max_grad_norm 1.0 \
     --evaluate_during_training \
     --seed 123456  2>&1 | tee train.log

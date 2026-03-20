@@ -42,6 +42,142 @@ for lang in dfg_function:
 cpu_cont = 16
 logger = logging.getLogger(__name__)
 
+cwe_map = {
+    "CWE-77": [
+        0,
+        "Improper Neutralization of Special Elements used in a Command ('Command Injection')",
+        "variant",
+        [0, 0, 1, 0, 0, 0],
+    ],
+    "CWE-20": [1, "Improper Input Validation", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-682": [2, "Incorrect Calculation", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-78": [
+        3,
+        "Improper Neutralization of Special Elements used in an OS Command ('OS Command Injection')",
+        "variant",
+        [0, 0, 1, 0, 0, 0],
+    ],
+    "CWE-362": [
+        4,
+        "Concurrent Execution using Shared Resource with Improper Synchronization ('Race Condition')",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-754": [
+        5,
+        "Improper Check for Unusual or Exceptional Conditions",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-476": [6, "NULL Pointer Dereference", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-287": [7, "Improper Authentication", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-269": [8, "Improper Privilege Management", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-59": [
+        9,
+        "Improper Link Resolution Before File Access ('Link Following')",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-18": [10, "Improper Sanitization of Filename", "variant", [0, 0, 1, 0, 0, 0]],
+    "CWE-264": [11, "Improper Access Control", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-416": [12, "Use After Free", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-79": [
+        13,
+        "Improper Neutralization of Input During Web Page Generation ('Cross-site Scripting')",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-617": [14, "Reachable Assertion", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-399": [15, "Resource Exhaustion", "deprecated", [0, 0, 0, 0, 1, 0]],
+    "CWE-125": [16, "Out-of-bounds Read", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-22": [
+        17,
+        "Improper Limitation of a Pathname to a Restricted Directory ('Path Traversal')",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-285": [18, "Improper Authorization", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-404": [
+        19,
+        "Improper Resource Shutdown or Release",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-189": [20, "Numeric Errors", "deprecated", [0, 0, 0, 0, 1, 0]],
+    "CWE-369": [21, "Divide By Zero", "variant", [0, 0, 1, 0, 0, 0]],
+    "CWE-674": [22, "Uncontrolled Recursion", "variant", [0, 0, 1, 0, 0, 0]],
+    "CWE-190": [23, "Integer Overflow or Wraparound", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-415": [24, "Double Free", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-835": [25, "Infinite Loop", "variant", [0, 0, 1, 0, 0, 0]],
+    "CWE-17": [
+        26,
+        "Improper Handling of Multiple Inputs to a Function",
+        "deprecated",
+        [0, 0, 0, 0, 1, 0],
+    ],
+    "CWE-134": [
+        27,
+        "Use of Externally-Controlled Format String",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-19": [28, "Improper Input Handling", "deprecated", [0, 0, 0, 0, 1, 0]],
+    "CWE-254": [29, "Security Features Bypass", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-704": [30, "Incorrect Type Conversion or Cast", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-732": [
+        31,
+        "Incorrect Permission Assignment for Critical Resource",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-400": [
+        32,
+        "Uncontrolled Resource Consumption ('Resource Exhaustion')",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-311": [33, "Missing Encryption of Sensitive Data", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-94": [
+        34,
+        "Improper Control of Generation of Code ('Code Injection')",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-200": [
+        35,
+        "Exposure of Sensitive Information to an Unauthorized Actor",
+        "base",
+        [0, 0, 0, 1, 0, 0],
+    ],
+    "CWE-388": [
+        36,
+        "Improper Handling of Exceptional Conditions",
+        "deprecated",
+        [0, 0, 0, 0, 1, 0],
+    ],
+    "CWE-772": [
+        37,
+        "Missing Release of Resource after Effective Lifetime",
+        "variant",
+        [0, 0, 1, 0, 0, 0],
+    ],
+    "CWE-834": [38, "Excessive Iteration", "variant", [0, 0, 1, 0, 0, 0]],
+    "CWE-119": [
+        39,
+        "Improper Restriction of Operations within the Bounds of a Memory Buffer",
+        "class",
+        [0, 1, 0, 0, 0, 0],
+    ],
+    "CWE-787": [40, "Out-of-bounds Write", "base", [0, 0, 0, 1, 0, 0]],
+    "CWE-284": [41, "Improper Access Control", "deprecated", [0, 0, 0, 0, 1, 0]],
+    "CWE-310": [42, "Cryptographic Issues", "category", [1, 0, 0, 0, 0, 0]],
+    "CWE-358": [
+        43,
+        "Improperly Implemented Security Check for Certificate Validity or Revocation",
+        "variant",
+        [0, 0, 1, 0, 0, 0],
+    ],
+}
 
 class InputFeatures(object):
     def __init__(
@@ -53,6 +189,7 @@ class InputFeatures(object):
         dfg_to_dfg,
         source_mask,
         labels,
+        groups
     ):
         self.example_id = example_id
         self.source_ids = source_ids
@@ -61,6 +198,7 @@ class InputFeatures(object):
         self.dfg_to_dfg = dfg_to_dfg
         self.source_mask = source_mask
         self.labels = labels
+        self.groups = groups
 
 
 class TextDataset(Dataset):
@@ -82,12 +220,15 @@ class TextDataset(Dataset):
         elif dataset == "json":
             df = pd.read_json(file_path)
             funcs = df["func"].tolist()
-            labels = df["cwe"].tolist()
-        one_hot_labels = []
-        for i in tqdm(range(len(labels))):
-            one_hot_labels.append(cwe_label_map[labels[i]][1])
+            cwe_labels = df["cwe"].tolist()
+            vul_labels = df["vul"].tolist()
+            groups = [cwe_map[cwe][3] for cwe in cwe_labels]
+        if args.data_type == "vul":
+                label = [[1,0] if l == 1 else [0,1] for l in vul_labels]
+        elif args.data_type == "cwe":
+                label = [cwe_label_map[cwe][1] for cwe in cwe_labels]
         self.examples = convert_examples_to_features(
-            funcs, one_hot_labels, tokenizer, args
+            funcs, label, groups, tokenizer, args
         )
 
     def __len__(self):
@@ -124,10 +265,11 @@ class TextDataset(Dataset):
             torch.tensor(self.examples[item].position_idx),
             torch.tensor(attn_mask),
             torch.tensor(self.examples[item].labels).float(),
+            torch.tensor(self.examples[item].groups).float(),
         )
 
 
-def convert_examples_to_features(examples, labels, tokenizer, args):
+def convert_examples_to_features(examples, labels, groups, tokenizer, args):
     features = []
     for example_index, example in enumerate(tqdm(examples, total=len(examples))):
         ##extract data flow
@@ -184,6 +326,7 @@ def convert_examples_to_features(examples, labels, tokenizer, args):
                 dfg_to_dfg,
                 source_mask,
                 labels[example_index],
+                groups[example_index]
             )
         )
     return features
@@ -312,7 +455,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
         tr_num = 0
         train_loss = 0
         for step, batch in enumerate(bar):
-            source_ids, source_mask, position_idx, attn_mask, labels = [x.to(args.device) for x in batch]
+            source_ids, source_mask, position_idx, attn_mask, labels, groups = [x.to(args.device) for x in batch]
             model.train()
 
             loss = model(
@@ -320,6 +463,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                 position_idx=position_idx,
                 attn_mask=attn_mask,
                 labels=labels,
+                groups=groups
             )
 
             if args.n_gpu > 1:
@@ -350,7 +494,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
 
                     # Early stopping logic
                     cur_acc = results.get(early_stopping_metric, 0)
-                    if cur_acc > best_acc:
+                    if cur_acc != best_acc:
                         best_acc = cur_acc
                         patience_counter = 0
                         logger.info("  "+"*"*20)  
@@ -362,7 +506,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                         if not os.path.exists(output_dir):
                             os.makedirs(output_dir)                        
                         model_to_save = model.module if hasattr(model,'module') else model
-                        output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
+                        output_dir = os.path.join(output_dir, '{}'.format(results['eval_acc'])) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
                     else:
@@ -391,7 +535,7 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     y_preds=[]  
     y_trues=[]
     for batch in eval_dataloader:
-        source_ids, source_mask, position_idx, att_mask, labels = [
+        source_ids, source_mask, position_idx, att_mask, labels, groups = [
             x.to(args.device) for x in batch
         ]
         with torch.no_grad():
@@ -399,6 +543,8 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
                 source_ids=source_ids,
                 position_idx=position_idx,
                 attn_mask=att_mask,
+                labels=None,
+                groups=None
             )
             y_preds += list((np.argmax(prob.cpu().numpy(), axis=1)))
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))    
@@ -422,9 +568,9 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
 
 def test(args, model, tokenizer, test_dataset):
     # build dataloader
-    # test_sampler = SequentialSampler(test_dataset)
-    # test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
-    test_dataloader = DataLoader(test_dataset, batch_size=args.eval_batch_size, num_workers=4, shuffle=False)
+    test_sampler = SequentialSampler(test_dataset)
+    test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
+    # test_dataloader = DataLoader(test_dataset, batch_size=args.eval_batch_size, num_workers=4, shuffle=True)
 
     # multi-gpu evaluate
     if args.n_gpu > 1:
@@ -439,13 +585,15 @@ def test(args, model, tokenizer, test_dataset):
     y_preds=[]  
     y_trues=[]
     for batch in test_dataloader:
-        source_ids, source_mask, position_idx, att_mask, labels = [x.to(args.device) for x in batch]
+        source_ids, source_mask, position_idx, att_mask, labels, groups = [x.to(args.device) for x in batch]
 
         with torch.no_grad():
             prob = model(
                 source_ids=source_ids,
                 position_idx=position_idx,
                 attn_mask=att_mask,
+                labels=None,
+                groups=None
             )
             y_preds += list((np.argmax(prob.cpu().numpy(), axis=1)))
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))
@@ -550,7 +698,7 @@ def main():
     parser.add_argument(
         "--early_stopping_patience", default=3, type=int, help="Number of evaluations after which training will stop if no improvement."
     )
-
+    parser.add_argument("--data_type", default="cwe", type=str, help="cwe or vul")
     args = parser.parse_args()
     # Setup CUDA, GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -572,13 +720,9 @@ def main():
     codebert = RobertaModel.from_pretrained(args.model_name_or_path)
     codebert.resize_token_embeddings(len(tokenizer))
 
+    num_class=len(cwe_label_map) if args.data_type=="cwe" else 2
 
-    model=Model(
-        encoder=codebert,
-        tokenizer=tokenizer,
-        args=args,
-        num_class=len(cwe_label_map)
-    )
+    model = Model(encoder=codebert, tokenizer=tokenizer, args=args, num_class=num_class)
 
     logger.info("Training/evaluation parameters %s", args)
     # Training

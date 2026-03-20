@@ -12,9 +12,8 @@ from transformers import ( get_linear_schedule_with_warmup, RobertaTokenizer, Ro
 from torch.optim import AdamW
 
 from tqdm import tqdm
-from model import DPCNN
+from model import Model
 from TextDataset import TextDataset
-
 # metrics
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
@@ -144,7 +143,7 @@ def train(args, train_dataset, model ,tokenizer, eval_dataset):
                         if not os.path.exists(output_dir):
                             os.makedirs(output_dir)                        
                         model_to_save = model.module if hasattr(model,'module') else model
-                        output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
+                        output_dir = os.path.join(output_dir, '{}'.format(results['eval_acc'])) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
                     else:
@@ -326,7 +325,7 @@ def main():
         "--early_stopping_patience", default=3, type=int, help="Number of evaluations after which training will stop if no improvement."
     )
     parser.add_argument("--dataset", default="json", type=str)
-
+    parser.add_argument("--data_type", default="cwe", type=str)
     args = parser.parse_args()
     # Setup CUDA, GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -335,14 +334,7 @@ def main():
 
     with open("../../data/big_vul/cwe_label_map.pkl", "rb") as f:
         cwe_label_map = pickle.load(f)
-    group_label_map = {
-        "category": [1, 0, 0, 0, 0, 0],
-        "class": [0, 1, 0, 0, 0, 0],
-        "variant": [0, 0, 1, 0, 0, 0],
-        "base": [0, 0, 0, 1, 0, 0],
-        "deprecated": [0, 0, 0, 0, 1, 0],
-        "pillar": [0, 0, 0, 0, 0, 1],
-    }
+
     # Setup logging
     logging.basicConfig(format='%(asctime)s - %(levelname)s - %(name)s -   %(message)s',datefmt='%m/%d/%Y %H:%M:%S',level=logging.INFO)
     logger.warning("device: %s, n_gpu: %s",device, args.n_gpu,)
@@ -350,23 +342,17 @@ def main():
     set_seed(args)
     tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_name)
     codebert = RobertaModel.from_pretrained(args.model_name_or_path)
-
-    model=DPCNN(
-        encoder=codebert,
-        tokenizer=tokenizer,
-        args=args,
-        num_class=len(cwe_label_map)
-    )
+    num_class = len(cwe_label_map) if args.data_type == "cwe" else 2
+    model = Model(encoder=codebert, tokenizer=tokenizer, args=args, num_class=num_class)
 
     logger.info("Training/evaluation parameters %s", args)
     # Training
     if args.do_train:
-        train_dataset = TextDataset(tokenizer, args, cwe_label_map, group_label_map, file_type='train',dataset=args.dataset)
+        train_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='train',dataset=args.dataset)
         eval_dataset = TextDataset(
             tokenizer,
             args,
             cwe_label_map,
-            group_label_map,
             file_type="eval",
             dataset=args.dataset
         )
@@ -382,7 +368,6 @@ def main():
             tokenizer,
             args,
             cwe_label_map,
-            group_label_map,
             file_type="test",
             dataset=args.dataset
         )

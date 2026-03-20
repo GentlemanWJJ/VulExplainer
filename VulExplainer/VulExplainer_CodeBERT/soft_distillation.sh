@@ -1,7 +1,7 @@
 python student_codebert_main.py \
     --alpha 0.7 \
     --output_dir=./saved_models \
-    --model_name=soft_distil_model.bin \
+    --model_name=soft_distil_model_megavul.bin \
     --tokenizer_name=microsoft/codebert-base \
     --model_name_or_path=microsoft/codebert-base \
     --train_data_file=../../data/megavul/train.json \

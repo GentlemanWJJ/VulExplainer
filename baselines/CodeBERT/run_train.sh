@@ -1,18 +1,19 @@
 python codebert_main.py \
     --output_dir=./saved_models \
     --model_name=model.bin \
-    --tokenizer_name=microsoft/codebert-base \
-    --model_name_or_path=microsoft/codebert-base \
-    --train_data_file=../../data/big_vul/train.csv \
-    --eval_data_file=../../data/big_vul/val.csv \
-    --test_data_file=../../data/big_vul/test.csv \
-    --do_train \
+    --tokenizer_name=microsoft/unixcoder-base \
+    --model_name_or_path=microsoft/unixcoder-base \
+    --train_data_file=../../data/megavul/train.json \
+    --eval_data_file=../../data/megavul/val.json \
+    --test_data_file=../../data/megavul/test.json \
+    --dataset=json \
+    --data_type=vul \
     --do_test \
     --block_size 512 \
-    --epochs 20 \
-    --train_batch_size 16 \
-    --eval_batch_size 16 \
-    --learning_rate 2e-4 \
+    --epochs 10 \
+    --train_batch_size 32 \
+    --eval_batch_size 32 \
+    --learning_rate 1e-4 \
     --max_grad_norm 1.0 \
     --evaluate_during_training \
     --seed 123456  2>&1 | tee train.log

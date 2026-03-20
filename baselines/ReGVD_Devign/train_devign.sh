@@ -4,13 +4,13 @@ python regvd_main.py \
     --model_name=devign_model.bin \
     --tokenizer_name=microsoft/graphcodebert-base \
     --model_name_or_path=microsoft/graphcodebert-base \
-    --train_data_file=../../data/big_vul/train.csv \
-    --eval_data_file=../../data/big_vul/val.csv \
-    --test_data_file=../../data/big_vul/test.csv \
+    --train_data_file=../../data/megavul/train.json \
+    --eval_data_file=../../data/megavul/val.json \
+    --test_data_file=../../data/megavul/test.json \
     --do_train \
     --do_test \
     --block_size 512 \
-    --epochs 100 \
+    --epochs 20 \
     --train_batch_size 128 \
     --eval_batch_size 128 \
     --learning_rate 5e-3 \

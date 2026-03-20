@@ -18,7 +18,7 @@ import multiprocessing
 from graphcodebert_model import Model
 import pandas as pd
 # metrics
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 # word-level tokenizer
 from tokenizers import Tokenizer
 import torch.nn.functional as F
@@ -63,8 +63,6 @@ class InputFeatures(object):
         self.labels = labels        
 
 
-
-
 class TextDataset(Dataset):
     def __init__(self, tokenizer, args, cwe_label_map, file_type,dataset):
         self.args = args
@@ -74,28 +72,25 @@ class TextDataset(Dataset):
             file_path = args.eval_data_file
         elif file_type == "test":
             file_path = args.test_data_file
-        if dataset == "bigvul":
+        if dataset=="csv":
             df = pd.read_csv(file_path)
             funcs = df["func_before"].tolist()
             labels = df["CWE ID"].tolist()
-        elif dataset == "diversevul":
+            groups = df["cwe_abstract_group"].tolist()
+        elif dataset == "json":
             df = pd.read_json(file_path)
             funcs = df["func"].tolist()
-            labels = df["cwe"].tolist()
-        one_hot_labels = []
-        for i in tqdm(range(len(labels))):
-            # count label freq if it's training data
-            if file_type == "train":
-                cwe_label_map[labels[i]][2] += 1
-            one_hot_labels.append(cwe_label_map[labels[i]][1])
-        self.examples = convert_examples_to_features(funcs, one_hot_labels, tokenizer, args)
+            cwe_labels = df["cwe"].tolist()
+            vul_labels = df["vul"].tolist()
+        if args.data_type == "vul":
+                label = [[1,0] if l == 1 else [0,1] for l in vul_labels]
+        elif args.data_type == "cwe":
+                label = [cwe_label_map[cwe][1] for cwe in cwe_labels]
+        self.examples = convert_examples_to_features(
+            funcs, label, tokenizer, args
+        )
         if file_type == "train":
             self.cwe_label_map = cwe_label_map
-            for example in self.examples[:3]:
-                logger.info("*** Example ***")
-                logger.info("label: {}".format(example.labels))
-                logger.info("source_ids: {}".format(' '.join(map(str, example.source_ids))))
-                logger.info("position_idx: {}".format(' '.join(map(str, example.position_idx))))
 
     def __len__(self):
         return len(self.examples)
@@ -131,7 +126,7 @@ class TextDataset(Dataset):
 
 def convert_examples_to_features(examples, labels, tokenizer, args):
     features = []
-    for example_index, example in enumerate(tqdm(examples,total=len(examples))):
+    for example_index, example in enumerate(tqdm(examples,total=len(examples),mininterval=120.0)):
         ##extract data flow
         code_tokens,dfg=extract_dataflow(example,
                                          parsers["c_sharp"],
@@ -247,7 +242,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
     # build dataloader
     train_sampler = RandomSampler(train_dataset)
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size, num_workers=0)
-    
+
     if args.use_logit_adjustment:
         logit_adjustment = compute_adjustment(tau=args.tau, args=args, cwe_label_map=cwe_label_map)
     else:
@@ -282,7 +277,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
     logger.info("  Total train batch size = %d",args.train_batch_size*args.gradient_accumulation_steps)
     logger.info("  Gradient Accumulation steps = %d", args.gradient_accumulation_steps)
     logger.info("  Total optimization steps = %d", args.max_steps)
-    
+
     global_step=0
     tr_loss, logging_loss, avg_loss, tr_nb, tr_num, train_loss = 0.0, 0.0, 0.0, 0, 0, 0
     best_acc=0
@@ -290,7 +285,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
     model.zero_grad()
 
     for idx in range(args.epochs): 
-        bar = tqdm(train_dataloader,total=len(train_dataloader))
+        bar = tqdm(train_dataloader,total=len(train_dataloader),mininterval=360.0)
         tr_num = 0
         train_loss = 0
         for step, batch in enumerate(bar):
@@ -313,10 +308,9 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
             train_loss += loss.item()
             if avg_loss == 0:
                 avg_loss = tr_loss
-                
+
             avg_loss = round(train_loss/tr_num,5)
-            bar.set_description("epoch {} loss {}".format(idx,avg_loss))
-              
+            bar.set_description("epoch {} loss {}".format(idx, avg_loss))
             if (step + 1) % args.gradient_accumulation_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
@@ -327,25 +321,26 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
 
                 if global_step % args.save_steps == 0:
                     results = evaluate(args, model, tokenizer, eval_dataset, eval_when_training=True)    
-                    
+
                     # Save model checkpoint
                     if results['eval_acc']>best_acc:
                         best_acc=results['eval_acc']
                         logger.info("  "+"*"*20)  
                         logger.info("  Best Acc:%s",round(best_acc,4))
                         logger.info("  "+"*"*20)                          
-                        
+
                         checkpoint_prefix = 'checkpoint-best-acc'
                         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))                        
                         if not os.path.exists(output_dir):
                             os.makedirs(output_dir)                        
                         model_to_save = model.module if hasattr(model,'module') else model
-                        output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
+                        output_dir = os.path.join(output_dir, '{}'.format(results['eval_acc'])) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
 
+
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
-    #build dataloader
+    # build dataloader
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
 
@@ -357,7 +352,7 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     logger.info("***** Running evaluation *****")
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
-    
+
     eval_loss = 0.0
     nb_eval_steps = 0
     model.eval()
@@ -371,16 +366,18 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
             y_preds += list((np.argmax(prob.cpu().numpy(), axis=1)))
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))
         nb_eval_steps += 1
-    
-    #calculate scores
-    best_acc = 0
-    
+
+    # calculate scores
     acc = accuracy_score(y_trues, y_preds)
-    
+    precision = precision_score(y_trues, y_preds, average="weighted")
+    recall = recall_score(y_trues, y_preds, average="weighted")
+    f1 = f1_score(y_trues, y_preds, average="weighted")
     result = {
         "eval_acc": float(acc),
+        "eval_precision": float(precision),
+        "eval_recall": float(recall),
+        "eval_f1": float(f1),
     }
-
     logger.info("***** Eval results *****")
     for key in sorted(result.keys()):
         logger.info("  %s = %s", key, str(round(result[key],4)))
@@ -415,8 +412,14 @@ def test(args, model, tokenizer, test_dataset):
         nb_eval_steps += 1
     # calculate scores
     acc = accuracy_score(y_trues, y_preds)
+    precision = precision_score(y_trues, y_preds, average="weighted")
+    recall = recall_score(y_trues, y_preds, average="weighted")
+    f1 = f1_score(y_trues, y_preds, average="weighted")
     result = {
         "test_accuracy": float(acc),
+        "test_precision": float(precision),
+        "test_recall": float(recall),
+        "test_f1": float(f1),
     }
 
     logger.info("***** Test results *****")
@@ -514,13 +517,14 @@ def main():
     config = RobertaConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
     tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_name)
     model = RobertaModel.from_pretrained(args.model_name_or_path)
-    model = Model(encoder=model, tokenizer=tokenizer, config=config, num_labels=len(cwe_label_map),args=args)
+    num_class = len(cwe_label_map) if args.data_type == "cwe" else 2
+    model = Model(encoder=model, tokenizer=tokenizer, config=config, num_labels=num_class,args=args)
     logger.info("Training/evaluation parameters %s", args)
     
     # Training
     if args.do_train:
-        train_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='train', dataset="diversevul")
-        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='eval', dataset="diversevul")
+        train_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='train', dataset=args.dataset)
+        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='eval', dataset=args.dataset)
         train(args, train_dataset, model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
     # Evaluation
     results = {}
@@ -529,7 +533,7 @@ def main():
         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
         model.load_state_dict(torch.load(output_dir, map_location=args.device))
         model.to(args.device)
-        test_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='test', dataset="diversevul")
+        test_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='test', dataset=args.dataset)
         y_trues, y_preds = test(args, model, tokenizer, test_dataset)
     return results
 

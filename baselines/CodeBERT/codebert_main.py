@@ -7,6 +7,7 @@ import pickle
 import random
 import re
 import numpy as np
+from regex import T
 import torch
 from torch.utils.data import DataLoader, Dataset, SequentialSampler, RandomSampler
 from transformers import (get_linear_schedule_with_warmup,
@@ -17,7 +18,7 @@ from tqdm import tqdm
 from codebert_model import Model
 import pandas as pd
 # metrics
-from sklearn.metrics import accuracy_score
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 # word-level tokenizer
 from tokenizers import Tokenizer
 import torch.nn.functional as F
@@ -45,28 +46,31 @@ class TextDataset(Dataset):
         elif file_type == "test":
             file_path = args.test_data_file
         self.examples = []
-        if dataset == "bigvul":
+        if dataset == "csv":
             df = pd.read_csv(file_path)
             funcs = df["func_before"].tolist()
             labels = df["CWE ID"].tolist()
             groups = df["cwe_abstract_group"].tolist()
-        elif dataset == "diversevul":
+        elif dataset == "json":
             df = pd.read_json(file_path)
             funcs = df["func"].tolist()
-            labels = df["cwe"].tolist()
+            cwe_labels = df["cwe"].tolist()
+            vul_labels = df["vul"].tolist()
+            if args.data_type == "vul":
+                label = [[1,0] if l == 1 else [0,1] for l in vul_labels]
+            elif args.data_type == "cwe":
+                label = [cwe_label_map[cwe][1] for cwe in cwe_labels]
+
         for i in tqdm(range(len(funcs))):
-            label = cwe_label_map[labels[i]][1]
-            # count label freq if it's training data
-            if file_type == "train":
-                cwe_label_map[labels[i]][2] += 1
-            self.examples.append(convert_examples_to_features(funcs[i], label, tokenizer, args))
+
+            self.examples.append(
+                convert_examples_to_features(
+                    funcs[i], label[i], tokenizer, args
+                )
+            )
         if file_type == "train":
             self.cwe_label_map = cwe_label_map
-            for example in self.examples[:3]:
-                logger.info("*** Example ***")
-                logger.info("label: {}".format(example.label))
-                logger.info("input_tokens: {}".format([x.replace('\u0120','_') for x in example.input_tokens]))
-                logger.info("input_ids: {}".format(' '.join(map(str, example.input_ids))))
+
 
     def __len__(self):
         return len(self.examples)
@@ -192,7 +196,7 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                     results = evaluate(args, model, tokenizer, eval_dataset, eval_when_training=True)    
                     
                     # Save model checkpoint
-                    if results['eval_acc']>best_acc:
+                    if results['eval_acc']!=best_acc:
                         best_acc=results['eval_acc']
                         logger.info("  "+"*"*20)  
                         logger.info("  Best Acc:%s",round(best_acc,4))
@@ -203,12 +207,12 @@ def train(args, train_dataset, model, tokenizer, eval_dataset, cwe_label_map):
                         if not os.path.exists(output_dir):
                             os.makedirs(output_dir)                        
                         model_to_save = model.module if hasattr(model,'module') else model
-                        output_dir = os.path.join(output_dir, '{}'.format(args.model_name)) 
+                        output_dir = os.path.join(output_dir, '{}'.format(results['eval_acc'])) 
                         torch.save(model_to_save.state_dict(), output_dir)
                         logger.info("Saving model checkpoint to %s", output_dir)
 
 def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
-    #build dataloader
+    # build dataloader
     eval_sampler = SequentialSampler(eval_dataset)
     eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler,batch_size=args.eval_batch_size,num_workers=0)
 
@@ -220,7 +224,7 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
     logger.info("***** Running evaluation *****")
     logger.info("  Num examples = %d", len(eval_dataset))
     logger.info("  Batch size = %d", args.eval_batch_size)
-    
+
     model.eval()
     y_preds=[]  
     y_trues=[]
@@ -230,9 +234,15 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
             lm_loss, logit = model(input_ids=input_ids, labels=labels)
             y_preds += list((np.argmax(logit.cpu().numpy(), axis=1)))
             y_trues += list((np.argmax(labels.cpu().numpy(), axis=1)))
-    acc = accuracy_score(y_trues, y_preds)    
+    acc = accuracy_score(y_trues, y_preds)
+    precision = precision_score(y_trues, y_preds, average="weighted")
+    recall = recall_score(y_trues, y_preds, average="weighted")
+    f1 = f1_score(y_trues, y_preds, average="weighted")
     result = {
         "eval_acc": float(acc),
+        "eval_precision": float(precision),
+        "eval_recall": float(recall),
+        "eval_f1": float(f1),
     }
     logger.info("***** Eval results *****")
     for key in sorted(result.keys()):
@@ -242,7 +252,8 @@ def evaluate(args, model, tokenizer, eval_dataset, eval_when_training=False):
 def test(args, model, tokenizer, test_dataset):
     # build dataloader
     test_sampler = SequentialSampler(test_dataset)
-    test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
+    # test_dataloader = DataLoader(test_dataset, sampler=test_sampler, batch_size=args.eval_batch_size, num_workers=0)
+    test_dataloader = DataLoader(test_dataset, batch_size=args.eval_batch_size, num_workers=4, shuffle=True)
 
     # multi-gpu evaluate
     if args.n_gpu > 1:
@@ -267,8 +278,14 @@ def test(args, model, tokenizer, test_dataset):
         nb_eval_steps += 1
     # calculate scores
     acc = accuracy_score(y_trues, y_preds)
+    precision = precision_score(y_trues, y_preds, average="weighted")
+    recall = recall_score(y_trues, y_preds, average="weighted")
+    f1 = f1_score(y_trues, y_preds, average="weighted")
     result = {
         "test_accuracy": float(acc),
+        "test_precision": float(precision),
+        "test_recall": float(recall),
+        "test_f1": float(f1),
     }
 
     logger.info("***** Test results *****")
@@ -350,6 +367,8 @@ def main():
                         help="random seed for initialization")
     parser.add_argument('--epochs', type=int, default=1,
                         help="training epochs")
+    parser.add_argument("--dataset", default="json", type=str)
+    parser.add_argument("--data_type", default="cwe", type=str)
     args = parser.parse_args()
     # Setup CUDA, GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -367,13 +386,14 @@ def main():
     config = RobertaConfig.from_pretrained(args.config_name if args.config_name else args.model_name_or_path)
     tokenizer = RobertaTokenizer.from_pretrained(args.tokenizer_name)
     model = RobertaModel.from_pretrained(args.model_name_or_path)    
-    model = Model(model, config, tokenizer, args, num_labels=len(cwe_label_map))
+    num_class = len(cwe_label_map) if args.data_type == "cwe" else 2
+    model = Model(model, config, tokenizer, args, num_labels=num_class)
 
     logger.info("Training/evaluation parameters %s", args)
     # Training
     if args.do_train:
-        train_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='train', dataset="diversevul")
-        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='eval', dataset="diversevul")
+        train_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='train', dataset=args.dataset)
+        eval_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='eval', dataset=args.dataset)
         train(args, train_dataset, model, tokenizer, eval_dataset, train_dataset.cwe_label_map)
     # Evaluation
     results = {}
@@ -382,7 +402,7 @@ def main():
         output_dir = os.path.join(args.output_dir, '{}'.format(checkpoint_prefix))  
         model.load_state_dict(torch.load(output_dir, map_location=args.device))
         model.to(args.device)#type:ignore
-        test_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='test', dataset="diversevul")
+        test_dataset = TextDataset(tokenizer, args, cwe_label_map, file_type='test', dataset=args.dataset)
         y_trues, y_preds = test(args, model, tokenizer, test_dataset)
     return results
 

@@ -1,16 +1,16 @@
 python main.py \
     --output_dir=./saved_models \
-    --model_name=train.bin \
-    --tokenizer_name=microsoft/codebert-base \
-    --model_name_or_path=microsoft/codebert-base \
-    --train_data_file=../../data/megavul/train.json \
-    --eval_data_file=../../data/megavul/val.json \
-    --test_data_file=../../data/megavul/test.json \
+    --model_name=model.bin \
+    --tokenizer_name=microsoft/graphcodebert-base \
+    --model_name_or_path=microsoft/graphcodebert-base \
+    --train_data_file=../../data/bigvul/train.json \
+    --eval_data_file=../../data/bigvul/val.json \
+    --test_data_file=../../data/bigvul/test.json \
     --dataset=json \
+    --data_type=vul \
     --do_train \
-    --do_test \
     --block_size 512 \
-    --epochs 30 \
+    --epochs 10 \
     --train_batch_size 128 \
     --eval_batch_size 128 \
     --learning_rate 2e-3 \
