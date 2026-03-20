@@ -1,5 +1,7 @@
 __pycache__/
 *.log
 *.bin
-data/
 saved_models/
+*.gz
+*.zip
+MSR*
